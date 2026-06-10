@@ -1,0 +1,12 @@
+quota_per_day: 2
+max_params: 50_000_000
+max_weight_mb: 200
+eval_timeout_sec: 600
+num_classes: 7
+input_size: 224
+normalize: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+splits: {public: 0.3, private: 0.7}
+freeze_leaderboard: false
+reveal_private: false
+reveal_realworld: false
+final_pick_deadline: "2026-XX-XXT23:59:59+08:00"

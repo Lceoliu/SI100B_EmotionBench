@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env.local
+*.db
+*.db-*
+/data/**
+!/data/.gitkeep
+!/data/public/.gitkeep
+!/data/private/.gitkeep
+!/data/realworld/.gitkeep
+/storage/**
+!/storage/.gitkeep
+/results/**
+!/results/.gitkeep
+/logs/**
+!/logs/.gitkeep
