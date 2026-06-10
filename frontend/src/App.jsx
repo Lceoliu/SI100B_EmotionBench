@@ -178,9 +178,9 @@ function HomePage({ resources }) {
           </div>
           <ol className="process-list">
             <li><span>课程教师</span>
-              <small>
+              <span className="ta-line">
                 <a href="https://sist.shanghaitech.edu.cn/lzh/main.htm" target="_blank" rel="noreferrer">李正浩</a>
-              </small></li>
+              </span></li>
             <li><span>TA</span>
               <span className="ta-line">
                 <a href="https://lceoliu.github.io/" target="_blank" rel="noreferrer">刘畅</a>，<a href="" target="_blank" rel="noreferrer">张境轩</a>
@@ -336,11 +336,34 @@ function AuthPanel({ user, onSession, onAfterLogin }) {
   );
 }
 
-function GroupPanel({ user, group }) {
+function GroupPanel({ user, group, onProfileUpdate }) {
+  const [draft, setDraft] = useState({ display_name: '', group_name: '' });
+
+  useEffect(() => {
+    if (!user || user.role !== 'student') return;
+    setDraft({ display_name: user.display_name || '', group_name: user.group_name || '' });
+  }, [user]);
+
+  async function submit(event) {
+    event.preventDefault();
+    await onProfileUpdate(draft);
+  }
+
   if (!user || user.role !== 'student') return null;
   return (
     <section className="utility-block">
       <div className="mini-title">我的小组</div>
+      <form className="stack profile-form" onSubmit={submit}>
+        <label>
+          显示名称
+          <input value={draft.display_name} onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} />
+        </label>
+        <label>
+          小组名
+          <input value={draft.group_name} onChange={(event) => setDraft({ ...draft, group_name: event.target.value })} placeholder="例如 1组 / Team Alpha" />
+        </label>
+        <button className="button secondary full">保存资料</button>
+      </form>
       <div className="group-name">{group.group_name || '暂未分组'}</div>
       <ul className="mate-list">
         {(group.mates || []).map((mate) => (
@@ -355,7 +378,7 @@ function GroupPanel({ user, group }) {
   );
 }
 
-function Leaderboard({ rows }) {
+function Leaderboard({ rows, admin, onDelete }) {
   const columns = [
     { key: 'rank', label: '#', render: (row) => <strong>{row.rank}</strong> },
     { key: 'display_name', label: '队伍/姓名' },
@@ -366,6 +389,17 @@ function Leaderboard({ rows }) {
     { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
     { key: 'updated_at', label: '更新时间', render: (row) => fmtTime(row.updated_at) }
   ];
+  if (admin) {
+    columns.push({
+      key: 'admin_action',
+      label: '管理',
+      render: (row) => (
+        <button className="link-button danger-link" onClick={() => onDelete(row.id)}>
+          <Trash2 size={14} /> 删除记录
+        </button>
+      )
+    });
+  }
   return (
     <section className="window">
       <header className="window-bar">
@@ -495,14 +529,24 @@ function MyRuns({ rows, onRefresh, onFinal }) {
 function StudentManager({ students, onSaveGroup, onToggleDisabled, onResetPassword }) {
   const [drafts, setDrafts] = useState({});
   const [passwords, setPasswords] = useState({});
+  const [groupCount, setGroupCount] = useState(8);
 
   useEffect(() => {
     const next = {};
+    let numericMax = 0;
     students.forEach((student) => {
       next[student.id] = student.group_name || '';
+      const match = String(student.group_name || '').match(/^(\d+)组$/);
+      if (match) numericMax = Math.max(numericMax, Number(match[1]));
     });
     setDrafts(next);
+    setGroupCount((value) => Math.max(value, numericMax, 1));
   }, [students]);
+
+  const groupOptions = useMemo(
+    () => Array.from({ length: groupCount }, (_, index) => `${index + 1}组`),
+    [groupCount]
+  );
 
   const columns = [
     { key: 'display_name', label: '姓名/队名' },
@@ -520,12 +564,19 @@ function StudentManager({ students, onSaveGroup, onToggleDisabled, onResetPasswo
       key: 'group_name',
       label: '小组',
       render: (row) => (
-        <input
-          className="table-input"
+        <select
+          className="table-select"
           value={drafts[row.id] ?? ''}
           onChange={(event) => setDrafts({ ...drafts, [row.id]: event.target.value })}
-          placeholder="例如 A组"
-        />
+        >
+          <option value="">未分组</option>
+          {drafts[row.id] && !groupOptions.includes(drafts[row.id]) && (
+            <option value={drafts[row.id]}>自定义：{drafts[row.id]}</option>
+          )}
+          {groupOptions.map((groupName) => (
+            <option value={groupName} key={groupName}>{groupName}</option>
+          ))}
+        </select>
       )
     },
     {
@@ -571,8 +622,26 @@ function StudentManager({ students, onSaveGroup, onToggleDisabled, onResetPasswo
     <section className="window">
       <header className="window-bar">
         <span>学生与分组</span>
-        <small>统一管理注册学生</small>
+        <small>数字分组候选</small>
       </header>
+      <div className="group-toolbar">
+        <label>
+          分组数量
+          <input
+            type="number"
+            min="1"
+            max="80"
+            value={groupCount}
+            onChange={(event) => setGroupCount(Math.max(1, Math.min(80, Number(event.target.value) || 1)))}
+          />
+        </label>
+        <div className="group-pills" aria-label="现有分组">
+          <span className="group-pill muted-pill">未分组</span>
+          {groupOptions.map((groupName) => (
+            <span className="group-pill" key={groupName}>{groupName}</span>
+          ))}
+        </div>
+      </div>
       <DataTable columns={columns} rows={students.filter((student) => student.role === 'student')} empty="暂无注册学生。" />
     </section>
   );
@@ -626,7 +695,7 @@ function InviteManager({ invites, onCreateInvite, onDeleteInvite }) {
   );
 }
 
-function OpsPanel({ queueRows, students, invites, config, onSaveGroup, onToggleDisabled, onResetPassword, onCreateInvite, onDeleteInvite }) {
+function OpsPanel({ queueRows, students, invites, config, onSaveGroup, onToggleDisabled, onResetPassword, onCreateInvite, onDeleteInvite, onDeleteSubmission }) {
   const columns = [
     { key: 'id', label: 'ID' },
     { key: 'email', label: '邮箱' },
@@ -635,7 +704,16 @@ function OpsPanel({ queueRows, students, invites, config, onSaveGroup, onToggleD
     { key: 'filename', label: '文件' },
     { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
     { key: 'message', label: '信息' },
-    { key: 'updated_at', label: '更新时间', render: (row) => fmtTime(row.updated_at) }
+    { key: 'updated_at', label: '更新时间', render: (row) => fmtTime(row.updated_at) },
+    {
+      key: 'admin_action',
+      label: '管理',
+      render: (row) => (
+        <button className="link-button danger-link" onClick={() => onDeleteSubmission(row.id)}>
+          <Trash2 size={14} /> 删除记录
+        </button>
+      )
+    }
   ];
   return (
     <div className="ops-stack">
@@ -761,6 +839,21 @@ function App() {
     }
   }
 
+  async function updateProfile(form) {
+    try {
+      const payload = await api('/api/me/profile', {
+        method: 'PATCH',
+        body: JSON.stringify(form)
+      });
+      setUser(payload.user);
+      await loadPublic();
+      await loadMine(payload.user);
+      setNotice('资料已保存');
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
   async function saveGroup(userId, groupName) {
     try {
       await api(`/api/admin/students/${userId}/group`, {
@@ -826,6 +919,19 @@ function App() {
     }
   }
 
+  async function deleteSubmission(submissionId) {
+    if (!window.confirm(`确认删除提交记录 #${submissionId}？此操作会同步影响排行榜。`)) return;
+    try {
+      await api(`/api/admin/submissions/${submissionId}`, { method: 'DELETE' });
+      await loadPublic();
+      await loadMine(user);
+      await loadAdmin(user);
+      setNotice('提交记录已删除');
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
   const pageTitle = {
     home: '人脸检测与表情分类项目',
     leaderboard: '公开排行榜',
@@ -846,7 +952,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <div className="brand-title">SI100B 表情识别评测平台</div>
+          <div className="brand-title">Emotional Bench</div>
           <div className="brand-subtitle">Face Detection · Emotion Classification · Benchmark</div>
         </div>
         <nav className="tabs" aria-label="主导航">
@@ -874,7 +980,7 @@ function App() {
 
           {notice && <div className="notice">{notice}</div>}
           {active === 'home' && <HomePage resources={resources} />}
-          {active === 'leaderboard' && <Leaderboard rows={leaderboard} />}
+          {active === 'leaderboard' && <Leaderboard rows={leaderboard} admin={user?.role === 'admin'} onDelete={deleteSubmission} />}
           {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} />}
           {active === 'runs' && <MyRuns rows={mine} onRefresh={() => loadMine(user)} onFinal={markFinal} />}
           {active === 'ops' && user?.role === 'admin' && (
@@ -888,13 +994,14 @@ function App() {
               onResetPassword={resetPassword}
               onCreateInvite={createInvite}
               onDeleteInvite={deleteInvite}
+              onDeleteSubmission={deleteSubmission}
             />
           )}
         </section>
 
         <aside className="utility">
           <AuthPanel user={user} onSession={setUser} onAfterLogin={(nextUser) => setActive(nextUser.role === 'admin' ? 'ops' : 'home')} />
-          <GroupPanel user={user} group={group} />
+          <GroupPanel user={user} group={group} onProfileUpdate={updateProfile} />
           <section className="utility-block">
             <div className="mini-title">系统状态</div>
             <dl className="system-list">

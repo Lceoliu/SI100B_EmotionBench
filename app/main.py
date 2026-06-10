@@ -314,6 +314,16 @@ def write_sync_index(db: Session) -> dict[str, Any]:
     return {"ok": True, "path": str(INDEX_ROOT), "submissions": len(submissions_payload), "leaderboard": len(leaderboard_rows)}
 
 
+def remove_submission_artifacts(submission: Submission) -> None:
+    if not submission.package_path or submission.package_path == "seed":
+        return
+    archive_path = Path(submission.package_path).resolve()
+    if archive_path.is_file() and SUBMISSION_ROOT in archive_path.parents:
+        submit_dir = archive_path.parent
+        if submit_dir.exists() and SUBMISSION_ROOT in submit_dir.resolve().parents:
+            shutil.rmtree(submit_dir, ignore_errors=True)
+
+
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     user_id = request.session.get("user_id")
     if not user_id:
@@ -460,34 +470,6 @@ def seed_demo_data(db: Session) -> None:
     ensure_admin_user(db)
     ensure_default_invite_code(db)
     normalize_demo_users(db)
-    if db.scalar(select(func.count(User.id)).where(User.role == "student")) > 0:
-        return
-    users = [
-        User(student_id="student01@shanghaitech.edu.cn", display_name="Baseline CNN", role="student", group_name="A组", password_hash=pwd_context.hash("demo")),
-        User(student_id="student14@shanghaitech.edu.cn", display_name="ResNet Lite", role="student", group_name="A组", password_hash=pwd_context.hash("demo")),
-        User(student_id="student27@shanghaitech.edu.cn", display_name="ViT Small", role="student", group_name="B组", password_hash=pwd_context.hash("demo")),
-    ]
-    db.add_all(users)
-    db.flush()
-    demo_rows = [
-        (users[0], "baseline_cnn.zip", "passed", 0.612, 1_840_000, 18.4),
-        (users[1], "resnet_lite_safetensors.zip", "passed", 0.741, 11_240_000, 84.7),
-        (users[2], "vit_small_attempt3.zip", "running", None, 22_900_000, 142.5),
-    ]
-    for user, filename, status, score, params, mb in demo_rows:
-        db.add(
-            Submission(
-                user_id=user.id,
-                filename=filename,
-                status=status,
-                message="Demo record" if status == "passed" else "Evaluation container is running public split.",
-                package_path="seed",
-                param_count=params,
-                weight_mb=mb,
-                public_score=score,
-            )
-        )
-    db.commit()
 
 
 def ensure_default_invite_code(db: Session) -> None:
@@ -720,6 +702,23 @@ def my_group(user: User = Depends(current_user), db: Session = Depends(get_db)) 
     return {"group_name": user.group_name, "mates": [user_payload(mate) for mate in mates]}
 
 
+@app.patch("/api/me/profile")
+async def update_my_profile(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    data = await request.json()
+    display_name = str(data.get("display_name") or "").strip()
+    group_name = str(data.get("group_name") or "").strip()
+    if len(display_name) < 2:
+        raise HTTPException(status_code=400, detail="显示名称至少需要 2 个字符。")
+    if len(display_name) > 120 or len(group_name) > 120:
+        raise HTTPException(status_code=400, detail="显示名称或小组名过长。")
+    user.display_name = display_name
+    user.group_name = group_name
+    db.commit()
+    db.refresh(user)
+    return {"user": user_payload(user)}
+
+
 @app.post("/api/submissions")
 async def create_submission(
     request: Request,
@@ -810,6 +809,20 @@ def mark_final(submission_id: int, request: Request, user: User = Depends(curren
 def admin_queue(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(Submission).join(User).order_by(Submission.created_at.desc()).limit(100)).all()
     return {"rows": [submission_payload(row, reveal_private=True) for row in rows]}
+
+
+@app.delete("/api/admin/submissions/{submission_id}")
+def admin_delete_submission(submission_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    submission = db.get(Submission, submission_id)
+    if not submission:
+        raise HTTPException(status_code=404, detail="提交记录不存在。")
+    remove_submission_artifacts(submission)
+    db.query(Score).filter(Score.submission_id == submission_id).delete()
+    db.delete(submission)
+    db.commit()
+    write_sync_index(db)
+    return {"ok": True}
 
 
 @app.post("/api/admin/sync")

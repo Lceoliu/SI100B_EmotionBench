@@ -40,7 +40,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -360,10 +361,16 @@ tbody tr:hover {
 }
 
 .group-name {
+  margin-top: 10px;
   border: 1px solid var(--line);
   background: #f8f8f4;
   padding: 8px 10px;
   font-weight: 780;
+}
+
+.profile-form {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .mate-list {
@@ -410,11 +417,22 @@ input {
   color: var(--ink);
 }
 
+select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 7px 8px;
+  background: #fff;
+  color: var(--ink);
+}
+
 input::placeholder {
   color: #5f5d57;
 }
 
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid var(--cobalt);
   outline-offset: 1px;
 }
@@ -739,6 +757,12 @@ dd {
   min-width: 150px;
   min-height: 32px;
   padding: 4px 6px;
+}
+
+.table-select {
+  min-width: 120px;
+  min-height: 32px;
+  padding-block: 4px;
 }
 
 .password-input {
