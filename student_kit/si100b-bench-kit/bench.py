@@ -266,7 +266,7 @@ def command_pack(args) -> None:
     suffix = f"（本地参考 Macro-F1 {score_payload['macro_f1'] * 100:.1f}）" if score_payload else ""
     print(f"\n✅ submission.zip 已生成 {suffix}")
     print(f"   sha256 前 16 位：{sha}")
-    print("   下一步：打开评测网站，先选择 dry-run 上传；通过后再正式提交。")
+    print("   下一步：打开评测网站，先选择“测试”上传；通过后再正式提交。")
 
 
 def main() -> None:

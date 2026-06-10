@@ -12,7 +12,7 @@ python bench.py check
 python bench.py pack --weights 你的权重.pth
 ```
 
-生成 `submission.zip` 后，到课程评测网站先选择 `dry-run` 上传。dry-run 不计分、不占每日配额；dry-run 不通过，正式提交也大概率会失败。
+生成 `submission.zip` 后，到课程评测网站先选择“测试”上传。测试不计分、不占每日配额；测试不通过，正式提交也大概率会失败。
 
 ## 你要改哪里
 
@@ -64,7 +64,7 @@ python bench.py pack --weights 你的权重.pth
 | `pretrained=True` | 模型定义还想下载预训练权重 | 改成 `pretrained=False` |
 | `output shape (N, 1000)` | 忘了换 7 类分类头 | 按模板把分类头改成 7 类 |
 | `参数量超过上限` | 模型太大 | 换小模型，优先试 resnet18 / mobilenetv3 |
-| dry-run 超时 | build_model 里写了训练或慢操作 | 把训练代码移出 `model/` |
+| 测试超时 | build_model 里写了训练或慢操作 | 把训练代码移出 `model/` |
 
 提问前，请先运行：
 

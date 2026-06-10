@@ -42,7 +42,7 @@ const statusLabels = {
 
 const modeLabels = {
   public: '正式提交',
-  'dry-run': 'Dry-run'
+  'dry-run': '测试'
 };
 
 const lectureItems = [
@@ -470,7 +470,7 @@ function SubmitPanel({ user, config, onCreated }) {
             <ClipboardCheck size={18} />
             <div>
               <strong>压缩包要求</strong>
-              <p>ZIP 内必须包含 <code>model.py</code> 和 <code>model.safetensors</code>。第一次提交请先 dry-run：dry-run 会进入真实沙箱做兼容性检查，不计分、不占每日配额。</p>
+              <p>ZIP 内必须包含 <code>model.py</code> 和 <code>model.safetensors</code>。第一次提交请先测试：测试会进入真实沙箱做兼容性检查，不计分、不占每日配额。</p>
             </div>
           </div>
           <label className="file-input">
@@ -483,7 +483,7 @@ function SubmitPanel({ user, config, onCreated }) {
               正式提交
             </button>
             <button type="button" className={mode === 'dry-run' ? 'active' : ''} onClick={() => setMode('dry-run')}>
-              先 dry-run
+              先测试
             </button>
           </div>
           {error && <p className="form-error">{error}</p>}

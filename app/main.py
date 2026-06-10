@@ -782,7 +782,7 @@ async def create_submission(
     (submit_dir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     status = "queued"
-    message = "Queued for public evaluation." if mode == "public" else "Queued for dry-run sandbox compatibility check."
+    message = "Queued for public evaluation." if mode == "public" else "已加入测试沙箱兼容性检查队列。"
     submission = Submission(
         user_id=user.id,
         filename=Path(package.filename).name,

@@ -50,7 +50,7 @@ def build_model() -> nn.Module:
 # =========================
 # 路线 B：我想用现成强模型
 # =========================
-# 需要先 pip install timm。
+# 需要先 pip install timm。服务器测试/正式评测也已安装 timm。
 #
 # import timm
 #

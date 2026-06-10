@@ -103,7 +103,7 @@ def available_splits(mode: str) -> list[tuple[str, Path, Path | None]]:
             ]
         if image_files:
             return [("dryrun", images_dir, labels_path if labels_path.exists() else None)]
-        raise RuntimeError("dry-run 样例数据未配置：需要 data/dryrun/images 下至少一张样例图片。请联系 TA。")
+        raise RuntimeError("测试样例数据未配置：需要 data/dryrun/images 下至少一张样例图片。请联系 TA。")
     splits = []
     for split in ("public", "private", "realworld"):
         split_dir = DATA_ROOT / split
@@ -225,7 +225,7 @@ def evaluate_submission(submission_id: int) -> None:
         submission = db.get(Submission, submission_id)
         if (submission.mode or "public") == "dry-run":
             submission.status = "validated"
-            submission.message = "Dry-run sandbox passed."
+            submission.message = "测试沙箱已通过。"
             db.commit()
             write_sync_index(db)
             return
