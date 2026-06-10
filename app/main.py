@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from passlib.context import CryptContext
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, func, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -45,6 +45,7 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(120))
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(24), default="student")
+    group_name: Mapped[str] = mapped_column(String(120), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     submissions: Mapped[list["Submission"]] = relationship(back_populates="user")
@@ -105,14 +106,23 @@ def now_iso(value: datetime | None) -> str | None:
 
 
 def user_payload(user: User) -> dict[str, Any]:
-    return {"id": user.id, "student_id": user.student_id, "display_name": user.display_name, "role": user.role}
+    return {
+        "id": user.id,
+        "email": user.student_id,
+        "student_id": user.student_id,
+        "display_name": user.display_name,
+        "role": user.role,
+        "group_name": user.group_name or "",
+    }
 
 
 def submission_payload(submission: Submission, reveal_private: bool = False) -> dict[str, Any]:
     return {
         "id": submission.id,
+        "email": submission.user.student_id,
         "student_id": submission.user.student_id,
         "display_name": submission.user.display_name,
+        "group_name": submission.user.group_name or "",
         "filename": submission.filename,
         "status": submission.status,
         "message": submission.message,
@@ -130,17 +140,17 @@ def submission_payload(submission: Submission, reveal_private: bool = False) -> 
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     user_id = request.session.get("user_id")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Please sign in first.")
+        raise HTTPException(status_code=401, detail="请先登录。")
     user = db.get(User, int(user_id))
     if not user:
         request.session.clear()
-        raise HTTPException(status_code=401, detail="Session expired.")
+        raise HTTPException(status_code=401, detail="登录状态已失效。")
     return user
 
 
 def admin_user(user: User = Depends(current_user)) -> User:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="TA access required.")
+        raise HTTPException(status_code=403, detail="需要 TA 管理员权限。")
     return user
 
 
@@ -246,20 +256,21 @@ def validate_package(file_bytes: bytes, filename: str) -> dict[str, Any]:
     return {"param_count": param_count, "weight_mb": weight_mb, "tensor_count": len(header)}
 
 def seed_demo_data(db: Session) -> None:
-    if db.scalar(select(func.count(User.id))) > 0:
+    ensure_admin_user(db)
+    normalize_demo_users(db)
+    if db.scalar(select(func.count(User.id)).where(User.role == "student")) > 0:
         return
     users = [
-        User(student_id="TA", display_name="Teaching Assistant", role="admin", password_hash=pwd_context.hash("demo")),
-        User(student_id="2026-001", display_name="Baseline CNN", role="student", password_hash=pwd_context.hash("demo")),
-        User(student_id="2026-014", display_name="ResNet Lite", role="student", password_hash=pwd_context.hash("demo")),
-        User(student_id="2026-027", display_name="ViT Small", role="student", password_hash=pwd_context.hash("demo")),
+        User(student_id="student01@shanghaitech.edu.cn", display_name="Baseline CNN", role="student", group_name="A组", password_hash=pwd_context.hash("demo")),
+        User(student_id="student14@shanghaitech.edu.cn", display_name="ResNet Lite", role="student", group_name="A组", password_hash=pwd_context.hash("demo")),
+        User(student_id="student27@shanghaitech.edu.cn", display_name="ViT Small", role="student", group_name="B组", password_hash=pwd_context.hash("demo")),
     ]
     db.add_all(users)
     db.flush()
     demo_rows = [
-        (users[1], "baseline_cnn.zip", "passed", 0.612, 1_840_000, 18.4),
-        (users[2], "resnet_lite_safetensors.zip", "passed", 0.741, 11_240_000, 84.7),
-        (users[3], "vit_small_attempt3.zip", "running", None, 22_900_000, 142.5),
+        (users[0], "baseline_cnn.zip", "passed", 0.612, 1_840_000, 18.4),
+        (users[1], "resnet_lite_safetensors.zip", "passed", 0.741, 11_240_000, 84.7),
+        (users[2], "vit_small_attempt3.zip", "running", None, 22_900_000, 142.5),
     ]
     for user, filename, status, score, params, mb in demo_rows:
         db.add(
@@ -277,11 +288,69 @@ def seed_demo_data(db: Session) -> None:
     db.commit()
 
 
+def ensure_admin_user(db: Session) -> None:
+    legacy_ta = db.scalar(select(User).where(User.student_id == "TA"))
+    if legacy_ta is not None:
+        submission_count = db.scalar(select(func.count(Submission.id)).where(Submission.user_id == legacy_ta.id))
+        if submission_count:
+            legacy_ta.student_id = "legacy-ta"
+            legacy_ta.password_hash = pwd_context.hash(secrets.token_urlsafe(24))
+        else:
+            db.delete(legacy_ta)
+        db.flush()
+    admin = db.scalar(select(User).where(User.student_id == "admin"))
+    if admin is None:
+        admin = User(
+            student_id="admin",
+            display_name="TA 管理员",
+            role="admin",
+            group_name="TA",
+            password_hash=pwd_context.hash("wo598053345@"),
+        )
+        db.add(admin)
+    else:
+        admin.display_name = "TA 管理员"
+        admin.role = "admin"
+        admin.group_name = "TA"
+        admin.password_hash = pwd_context.hash("wo598053345@")
+    db.commit()
+
+
+def normalize_demo_users(db: Session) -> None:
+    mappings = {
+        "2026-001": ("student01@shanghaitech.edu.cn", "A组"),
+        "2026-014": ("student14@shanghaitech.edu.cn", "A组"),
+        "2026-027": ("student27@shanghaitech.edu.cn", "B组"),
+    }
+    for old_id, (email, group_name) in mappings.items():
+        user = db.scalar(select(User).where(User.student_id == old_id))
+        if user is None:
+            continue
+        existing = db.scalar(select(User).where(User.student_id == email))
+        if existing is None:
+            user.student_id = email
+            user.group_name = group_name
+        else:
+            user.group_name = group_name
+    db.commit()
+
+
+def ensure_schema() -> None:
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(users)")).mappings().all()
+        column_names = {row["name"] for row in rows}
+        if rows and "group_name" not in column_names:
+            conn.execute(text("ALTER TABLE users ADD COLUMN group_name VARCHAR(120) DEFAULT '' NOT NULL"))
+
+
 @app.on_event("startup")
 def startup() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     SUBMISSION_ROOT.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    ensure_schema()
     with SessionLocal() as db:
         seed_demo_data(db)
 
@@ -319,14 +388,14 @@ def session_info(request: Request, db: Session = Depends(get_db)) -> dict[str, A
 async def register(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     data = await request.json()
     if data.get("invite_code") != INVITE_CODE:
-        raise HTTPException(status_code=400, detail="Invalid invite code.")
-    student_id = str(data.get("student_id", "")).strip()
+        raise HTTPException(status_code=400, detail="邀请码无效。")
+    student_id = str(data.get("email") or data.get("student_id") or "").strip().lower()
     display_name = str(data.get("display_name", "")).strip()
     password = str(data.get("password", ""))
-    if len(student_id) < 3 or len(display_name) < 2 or len(password) < 8:
-        raise HTTPException(status_code=400, detail="Use a valid student id, display name, and password of at least 8 chars.")
+    if "@" not in student_id or len(display_name) < 2 or len(password) < 8:
+        raise HTTPException(status_code=400, detail="请填写有效邮箱、姓名，以及至少 8 位密码。")
     if db.scalar(select(User).where(User.student_id == student_id)):
-        raise HTTPException(status_code=409, detail="Student id already registered.")
+        raise HTTPException(status_code=409, detail="该邮箱已注册。")
     user = User(student_id=student_id, display_name=display_name, password_hash=pwd_context.hash(password))
     db.add(user)
     db.commit()
@@ -338,11 +407,11 @@ async def register(request: Request, db: Session = Depends(get_db)) -> dict[str,
 @app.post("/api/auth/login")
 async def login(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     data = await request.json()
-    student_id = str(data.get("student_id", "")).strip()
+    student_id = str(data.get("email") or data.get("student_id") or "").strip().lower()
     password = str(data.get("password", ""))
     user = db.scalar(select(User).where(User.student_id == student_id))
     if not user or not pwd_context.verify(password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid student id or password.")
+        raise HTTPException(status_code=401, detail="账号或密码错误。")
     request.session["user_id"] = user.id
     return {"user": user_payload(user)}
 
@@ -380,6 +449,18 @@ def my_submissions(user: User = Depends(current_user), db: Session = Depends(get
     return {"rows": [submission_payload(row, reveal_private=True) for row in rows]}
 
 
+@app.get("/api/me/group")
+def my_group(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    if not user.group_name:
+        return {"group_name": "", "mates": []}
+    mates = db.scalars(
+        select(User)
+        .where(User.group_name == user.group_name, User.role == "student")
+        .order_by(User.display_name.asc())
+    ).all()
+    return {"group_name": user.group_name, "mates": [user_payload(mate) for mate in mates]}
+
+
 @app.post("/api/submissions")
 async def create_submission(
     mode: str = Form("public"),
@@ -388,9 +469,9 @@ async def create_submission(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     if mode not in {"public", "dry-run"}:
-        raise HTTPException(status_code=400, detail="Unknown submission mode.")
+        raise HTTPException(status_code=400, detail="未知提交模式。")
     if not package.filename or not package.filename.endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Upload a .zip package.")
+        raise HTTPException(status_code=400, detail="请上传 .zip 压缩包。")
 
     cfg = load_config()
     quota = int(cfg.get("quota_per_day", 2))
@@ -403,7 +484,7 @@ async def create_submission(
         )
     )
     if mode == "public" and today_count >= quota:
-        raise HTTPException(status_code=429, detail=f"Daily quota reached ({quota}).")
+        raise HTTPException(status_code=429, detail=f"今日提交次数已达上限（{quota} 次）。")
 
     content = await package.read()
     try:
@@ -452,9 +533,9 @@ async def create_submission(
 def mark_final(submission_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     submission = db.get(Submission, submission_id)
     if not submission or submission.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Submission not found.")
+        raise HTTPException(status_code=404, detail="提交记录不存在。")
     if submission.status not in {"passed", "final"}:
-        raise HTTPException(status_code=400, detail="Only passed submissions can be selected as final.")
+        raise HTTPException(status_code=400, detail="只有已通过的提交可以设为最终提交。")
     db.query(Submission).filter(Submission.user_id == user.id).update({Submission.final_pick: False})
     submission.final_pick = True
     submission.status = "final"
@@ -467,6 +548,50 @@ def mark_final(submission_id: int, user: User = Depends(current_user), db: Sessi
 def admin_queue(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(Submission).join(User).order_by(Submission.created_at.desc()).limit(100)).all()
     return {"rows": [submission_payload(row, reveal_private=True) for row in rows]}
+
+
+@app.get("/api/admin/students")
+def admin_students(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    users = db.scalars(select(User).order_by(User.role.asc(), User.group_name.asc(), User.display_name.asc())).all()
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in users:
+        if item.role != "student":
+            continue
+        groups.setdefault(item.group_name or "未分组", []).append(user_payload(item))
+    return {"rows": [user_payload(item) for item in users], "groups": groups}
+
+
+@app.patch("/api/admin/students/{user_id}/group")
+async def admin_update_group(user_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    data = await request.json()
+    group_name = str(data.get("group_name", "")).strip()
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在。")
+    if user.role == "admin":
+        raise HTTPException(status_code=400, detail="管理员账号不参与学生分组。")
+    user.group_name = group_name
+    db.commit()
+    db.refresh(user)
+    return {"user": user_payload(user)}
+
+
+@app.post("/api/admin/groups/bulk")
+async def admin_bulk_groups(request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    data = await request.json()
+    assignments = data.get("assignments", [])
+    if not isinstance(assignments, list):
+        raise HTTPException(status_code=400, detail="assignments 必须是数组。")
+    updated = 0
+    for item in assignments:
+        if not isinstance(item, dict):
+            continue
+        user = db.get(User, int(item.get("user_id", 0)))
+        if user and user.role == "student":
+            user.group_name = str(item.get("group_name", "")).strip()
+            updated += 1
+    db.commit()
+    return {"updated": updated}
 
 
 if (FRONTEND_DIST / "assets").exists():

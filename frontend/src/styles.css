@@ -36,6 +36,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
+  overflow-x: hidden;
 }
 
 button,
@@ -92,11 +93,13 @@ button:disabled {
   display: flex;
   align-items: stretch;
   gap: 0;
+  max-width: 100%;
   overflow-x: auto;
 }
 
 .tabs button {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 7px;
   min-width: 118px;
@@ -106,6 +109,7 @@ button:disabled {
   background: transparent;
   color: var(--ink);
   font-weight: 680;
+  white-space: nowrap;
 }
 
 .tabs button:last-child {
@@ -336,11 +340,52 @@ tbody tr:hover {
 .identity span {
   color: var(--muted);
   font-size: 0.86rem;
+  overflow-wrap: anywhere;
 }
 
 .stack {
   display: grid;
   gap: 10px;
+}
+
+.hint-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.group-name {
+  border: 1px solid var(--line);
+  background: #f8f8f4;
+  padding: 8px 10px;
+  font-weight: 780;
+}
+
+.mate-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mate-list li {
+  display: grid;
+  gap: 2px;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 8px;
+}
+
+.mate-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.mate-list span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
 }
 
 label {
@@ -359,6 +404,10 @@ input {
   padding: 7px 8px;
   background: #fff;
   color: var(--ink);
+}
+
+input::placeholder {
+  color: #5f5d57;
 }
 
 input:focus-visible {
@@ -394,6 +443,121 @@ input:focus-visible {
   grid-template-columns: minmax(0, 1fr) 260px;
   gap: 18px;
   padding: 16px;
+}
+
+.home-stack,
+.ops-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.home-intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
+  padding: 16px;
+}
+
+.home-intro h2 {
+  margin: 0 0 8px;
+  font-family: var(--font-serif);
+  font-size: 1.45rem;
+  letter-spacing: 0;
+}
+
+.home-intro p {
+  margin: 0;
+  max-width: 70ch;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.process-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.process-list li {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: #f8f8f4;
+}
+
+.process-list span {
+  font-weight: 780;
+}
+
+.process-list small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.lecture-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  border-top: 1px solid var(--line-soft);
+}
+
+.lecture-row {
+  min-height: 112px;
+  padding: 12px;
+  border-right: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.lecture-row strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.lecture-row p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+}
+
+.resource-link,
+.resource-note {
+  min-height: 98px;
+  border: 1px solid var(--line);
+  background: #f8f8f4;
+  padding: 12px;
+}
+
+.resource-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--cobalt);
+  font-weight: 780;
+  text-decoration: none;
+}
+
+.resource-link:hover,
+.resource-link:focus-visible {
+  background: var(--cobalt);
+  color: #fff;
+  outline: 2px solid var(--cobalt);
+  outline-offset: 1px;
+}
+
+.resource-note p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
 }
 
 .submit-form {
@@ -488,6 +652,12 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.table-input {
+  min-width: 150px;
+  min-height: 32px;
+  padding: 4px 6px;
+}
+
 .ops-strip {
   display: flex;
   flex-wrap: wrap;
@@ -546,6 +716,11 @@ dd {
     flex-direction: column;
     gap: 0;
     padding: 10px 14px 0;
+    overflow: hidden;
+  }
+
+  .tabs {
+    width: 100%;
   }
 
   .tabs button {
@@ -561,6 +736,11 @@ dd {
   }
 
   .submit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .home-intro,
+  .resource-grid {
     grid-template-columns: 1fr;
   }
 }
