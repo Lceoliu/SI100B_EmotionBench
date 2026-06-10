@@ -3,6 +3,7 @@ import {
   BookOpen,
   ClipboardCheck,
   Database,
+  Download,
   ExternalLink,
   FileArchive,
   Home,
@@ -17,7 +18,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 
 const baseTabs = [
-  { id: 'home', label: '项目主页', icon: Home },
+  { id: 'home', label: '主页', icon: Home },
   { id: 'leaderboard', label: '排行榜', icon: Table2 },
   { id: 'submit', label: '提交模型', icon: UploadCloud },
   { id: 'runs', label: '我的记录', icon: ListChecks }
@@ -36,21 +37,37 @@ const statusLabels = {
 };
 
 const lectureItems = [
-  ['环境配置与图像基础', '安装必要环境，理解图像读取、像素、通道和基本数据结构。'],
-  ['OpenCV 基本操作', '读写图像、缩放、绘制图形，并接触级联分类器做人脸检测。'],
-  ['模型训练', '从基础分类网络开始，理解训练循环、损失函数和参数更新。'],
-  ['模型推理', '加载训练好的模型，对输入图像执行预测并取回结果。'],
-  ['端到端流程', '串联读图、人脸检测、Tensor 转换、推理和可视化输出。'],
-  ['Matplotlib 可视化', '用图表展示样本、预测结果和训练过程。'],
-  ['数据标注的重要性', '分析错误样例，理解标注质量和补充数据对准确率的影响。'],
-  ['扩展主题', '摄像头实时读取、YOLO 检测、数据增强等进阶方向。']
+  { title: '环境配置与图像基础', detail: '安装必要环境，理解图像读取、像素、通道和基本数据结构。', resourceId: 'lab1' },
+  { title: 'OpenCV 基本操作', detail: '读写图像、缩放、绘制图形，并接触级联分类器做人脸检测。', resourceId: 'lab2' },
+  { title: '模型训练', detail: '从基础分类网络开始，理解训练循环、损失函数和参数更新。', resourceId: 'lab3' },
+  { title: '模型推理', detail: '加载训练好的模型，对输入图像执行预测并取回结果。', resourceId: 'lab4' },
+  { title: '端到端流程', detail: '串联读图、人脸检测、Tensor 转换、推理和可视化输出。', resourceId: 'lab5' },
+  { title: 'Matplotlib 可视化', detail: '用图表展示样本、预测结果和训练过程。', resourceId: 'lab6' },
+  { title: '数据标注的重要性', detail: '分析错误样例，理解标注质量和补充数据对准确率的影响。', resourceId: 'lab7' },
+  { title: '扩展主题', detail: '摄像头实时读取、YOLO 检测、数据增强等进阶方向。', resourceId: 'lab8' }
 ];
 
+let csrfToken = '';
+
+function setCsrfToken(token) {
+  csrfToken = token || '';
+}
+
 async function api(path, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+  const headers = new Headers(options.headers || {});
+  if (!(options.body instanceof FormData) && options.body !== undefined) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
+    headers.set('X-Request-Nonce', crypto.randomUUID());
+    headers.set('X-Request-Time', String(Date.now()));
+  }
   const res = await fetch(path, {
     credentials: 'same-origin',
-    headers: options.body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
-    ...options
+    ...options,
+    headers
   });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(payload.detail || `请求失败：${res.status}`);
@@ -123,7 +140,14 @@ function DataTable({ columns, rows, empty }) {
   );
 }
 
-function HomePage() {
+function HomePage({ resources }) {
+  const resourceMap = useMemo(() => {
+    const next = new Map();
+    resources.forEach((item) => next.set(item.id, item));
+    return next;
+  }, [resources]);
+  const projectRules = resourceMap.get('project-rules');
+
   return (
     <div className="home-stack">
       <section className="window">
@@ -133,15 +157,19 @@ function HomePage() {
         </header>
         <div className="home-intro">
           <div>
-            <h2>从读入图像到识别表情</h2>
+            <h2>从人脸检测到表情识别</h2>
             <p>
-              本项目面向 SI100B 课程实践：学生将从基础图像概念和 OpenCV 操作开始，逐步完成“读取图像、人脸检测、表情分类”的端到端流程，并通过评测平台提交模型包查看公开榜结果。
+              本项目为 SI100B 课程Project 人脸检测与表情分类 的评测平台。用户可以提交模型并查看公开榜结果。
             </p>
           </div>
           <ol className="process-list">
-            <li><span>读入图像</span><small>理解图像尺寸、通道和预处理。</small></li>
-            <li><span>检测人脸</span><small>定位图像中的人脸区域。</small></li>
-            <li><span>分类表情</span><small>用神经网络输出表情类别。</small></li>
+            <li><span>课程教师</span>
+              <small>
+                <a href="https://sist.shanghaitech.edu.cn/lzh/main.htm" target="_blank" rel="noreferrer">李正浩</a>
+              </small></li>
+            <li><span>TA</span>
+              <a href="https://lceoliu.github.io/" target="_blank" rel="noreferrer">刘畅</a>，<a href="" target="_blank" rel="noreferrer">张境轩</a>
+            </li>
           </ol>
         </div>
       </section>
@@ -149,15 +177,29 @@ function HomePage() {
       <section className="window">
         <header className="window-bar">
           <span>课程路径</span>
-          <small>8 个 lecture 主题</small>
+          <small>8 次 lab 主题</small>
         </header>
         <div className="lecture-grid">
-          {lectureItems.map(([title, detail]) => (
-            <div className="lecture-row" key={title}>
-              <strong>{title}</strong>
-              <p>{detail}</p>
+          {lectureItems.map((item) => {
+            const resource = resourceMap.get(item.resourceId);
+            return (
+            <div className="lecture-row" key={item.title}>
+              <strong>{item.title}</strong>
+              <p>{item.detail}</p>
+              {resource?.available ? (
+                <a className="download-link" href={resource.download_url}>
+                  <Download size={15} />
+                  <span>下载 {resource.title.split('：')[0]}</span>
+                </a>
+              ) : (
+                <span className="download-link disabled">
+                  <Download size={15} />
+                  <span>资料待上传</span>
+                </span>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 
@@ -171,13 +213,20 @@ function HomePage() {
             <ExternalLink size={18} />
             <span>Blackboard 课程资源</span>
           </a>
-          <div className="resource-note">
+          {/* <div className="resource-note">
             <strong>建议补充阅读</strong>
             <p>复习 OpenCV 图像读写和 resize、PyTorch Dataset/DataLoader、模型保存与加载、Matplotlib 可视化，以及 safetensors 模型权重格式。</p>
-          </div>
+          </div> */}
           <div className="resource-note">
-            <strong>评分结构</strong>
-            <p>课程项目包含参与与 checkpoint、bonus，以及最终报告。平台评测只负责模型提交、公开榜和最终提交记录。</p>
+            <strong>项目评分</strong>
+            <p>课程project评分包含参与与 checkpoint、bonus，以及最终提交的文字报告。平台评测只负责模型提交、公开榜和最终提交记录。完整规则请查看
+              {' '}
+              {projectRules?.available ? (
+                <a href={projectRules.download_url}>此处的文件下载链接</a>
+              ) : (
+                <span>此处的文件下载链接</span>
+              )}。
+            </p>
           </div>
         </div>
       </section>
@@ -198,6 +247,7 @@ function AuthPanel({ user, onSession, onAfterLogin }) {
     try {
       const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
       const payload = await api(endpoint, { method: 'POST', body: JSON.stringify(form) });
+      setCsrfToken(payload.csrf_token);
       onSession(payload.user);
       onAfterLogin?.(payload.user);
     } catch (err) {
@@ -209,6 +259,7 @@ function AuthPanel({ user, onSession, onAfterLogin }) {
 
   async function logout() {
     await api('/api/auth/logout', { method: 'POST' });
+    setCsrfToken('');
     onSession(null);
   }
 
@@ -236,12 +287,12 @@ function AuthPanel({ user, onSession, onAfterLogin }) {
       </div>
       <form className="stack" onSubmit={submit}>
         <label>
-          邮箱 / 管理员账号
+          邮箱
           <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@shanghaitech.edu.cn" />
         </label>
         {mode === 'register' && (
           <label>
-            姓名或队名
+            希望展示的名称
             <input value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} />
           </label>
         )}
@@ -259,7 +310,6 @@ function AuthPanel({ user, onSession, onAfterLogin }) {
             <input value={form.invite_code} onChange={(e) => setForm({ ...form, invite_code: e.target.value })} />
           </label>
         )}
-        <p className="hint-text">TA 管理员使用账号 <code>admin</code> 登录。</p>
         {error && <p className="form-error">{error}</p>}
         <button className="button primary full" disabled={busy}>
           <LogIn size={16} /> {busy ? '处理中' : mode === 'login' ? '登录' : '创建账号'}
@@ -283,7 +333,7 @@ function GroupPanel({ user, group }) {
           </li>
         ))}
       </ul>
-      {!group.group_name && <p className="hint-text">TA 分组后会在这里显示队友。</p>}
+      {!group.group_name && <p className="hint-text">分组后会在这里显示队友。</p>}
     </section>
   );
 }
@@ -510,6 +560,7 @@ function App() {
   const [mine, setMine] = useState([]);
   const [queue, setQueue] = useState([]);
   const [students, setStudents] = useState([]);
+  const [resources, setResources] = useState([]);
   const [group, setGroup] = useState({ group_name: '', mates: [] });
   const [config, setConfig] = useState({});
   const [notice, setNotice] = useState('');
@@ -521,14 +572,17 @@ function App() {
   }, [active, user]);
 
   async function loadPublic() {
-    const [cfg, board, session] = await Promise.all([
+    const [cfg, board, session, resourcePayload] = await Promise.all([
       api('/api/config'),
       api('/api/leaderboard'),
-      api('/api/session')
+      api('/api/session'),
+      api('/api/resources')
     ]);
+    setCsrfToken(session.csrf_token);
     setConfig(cfg);
     setLeaderboard(board.rows || []);
     setUser(session.user);
+    setResources(resourcePayload.rows || []);
   }
 
   async function loadMine(currentUser = user) {
@@ -621,10 +675,10 @@ function App() {
   }[active];
 
   const pageCopy = {
-    home: '课程项目资料、学习路径和评测平台入口集中在这里。',
-    leaderboard: '公开集只展示可公开比较的分数，私有集与真实场景集默认不对学生公开。',
-    submit: '上传包含 model.py 与 model.safetensors 的 ZIP，平台会先执行静态检查。',
-    runs: '查看自己的提交状态、公开分数，并选择最终提交。',
+    home: 'SI100B Spring 2026 课程项目评测平台，欢迎提交模型并查看排行榜！',
+    leaderboard: '公开排行榜每日更新，展示每位学生/队伍的最高有效提交结果。',
+    submit: '上传包含 model.py 与 model.safetensors 的 ZIP 文件',
+    runs: '查看自己的提交状态、公开分数。',
     ops: 'TA 可查看评测队列、注册学生，并统一维护学生分组。'
   }[active];
 
@@ -659,7 +713,7 @@ function App() {
           </div>
 
           {notice && <div className="notice">{notice}</div>}
-          {active === 'home' && <HomePage />}
+          {active === 'home' && <HomePage resources={resources} />}
           {active === 'leaderboard' && <Leaderboard rows={leaderboard} />}
           {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} />}
           {active === 'runs' && <MyRuns rows={mine} onRefresh={() => loadMine(user)} onFinal={markFinal} />}

@@ -211,6 +211,8 @@ h1 {
 .link-button:hover:not(:disabled) {
   background: var(--cobalt);
   color: #fff;
+  box-shadow: 2px 2px 0 var(--shadow-hard);
+  transform: translate(-1px, -1px);
 }
 
 .table-wrap {
@@ -305,6 +307,8 @@ tbody tr:hover {
 .button:focus-visible {
   outline: 2px solid var(--cobalt);
   outline-offset: 1px;
+  box-shadow: 2px 2px 0 var(--shadow-hard);
+  transform: translate(-1px, -1px);
 }
 
 .button.full {
@@ -438,6 +442,10 @@ input:focus-visible {
   color: #fff;
 }
 
+.segmented button:hover:not(.active) {
+  background: var(--cobalt-quiet);
+}
+
 .submit-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 260px;
@@ -488,6 +496,12 @@ input:focus-visible {
   background: #f8f8f4;
 }
 
+.process-list li:hover {
+  background: #fff;
+  box-shadow: 2px 2px 0 var(--shadow-hard);
+  transform: translate(-1px, -1px);
+}
+
 .process-list span {
   font-weight: 780;
 }
@@ -505,14 +519,22 @@ input:focus-visible {
 
 .lecture-row {
   min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px;
   border-right: 1px solid var(--line-soft);
   border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.lecture-row:hover {
+  background: #f8f8f4;
+  box-shadow: inset 0 0 0 2px var(--cobalt-quiet);
 }
 
 .lecture-row strong {
   display: block;
-  margin-bottom: 6px;
 }
 
 .lecture-row p {
@@ -520,6 +542,45 @@ input:focus-visible {
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1.55;
+}
+
+.download-link {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  margin-top: auto;
+  border: 1px solid var(--line);
+  padding: 5px 8px;
+  background: #fff;
+  color: var(--cobalt);
+  font-size: 0.82rem;
+  font-weight: 760;
+  text-decoration: none;
+}
+
+.download-link:hover,
+.download-link:focus-visible {
+  background: var(--cobalt);
+  color: #fff;
+  box-shadow: 2px 2px 0 var(--shadow-hard);
+  outline: 2px solid var(--cobalt);
+  outline-offset: 1px;
+  transform: translate(-1px, -1px);
+}
+
+.download-link.disabled {
+  color: var(--muted);
+  background: var(--surface-low);
+  cursor: not-allowed;
+}
+
+.download-link.disabled:hover {
+  color: var(--muted);
+  background: var(--surface-low);
+  box-shadow: none;
+  outline: 0;
+  transform: none;
 }
 
 .resource-grid {
@@ -552,6 +613,14 @@ input:focus-visible {
   color: #fff;
   outline: 2px solid var(--cobalt);
   outline-offset: 1px;
+  box-shadow: 2px 2px 0 var(--shadow-hard);
+  transform: translate(-1px, -1px);
+}
+
+.resource-note:hover {
+  background: #fff;
+  box-shadow: 2px 2px 0 var(--shadow-hard);
+  transform: translate(-1px, -1px);
 }
 
 .resource-note p {
@@ -596,6 +665,13 @@ code {
   border: 1px dashed var(--line);
   padding: 14px;
   background: #fff;
+}
+
+.file-input:hover,
+.file-input:focus-within {
+  background: var(--cobalt-quiet);
+  box-shadow: 2px 2px 0 var(--shadow-hard);
+  transform: translate(-1px, -1px);
 }
 
 .file-input input {
@@ -773,10 +849,16 @@ dd {
 
 @media (prefers-reduced-motion: no-preference) {
   .button,
+  .download-link,
+  .file-input,
+  .lecture-row,
+  .process-list li,
+  .resource-link,
+  .resource-note,
   .tabs button,
   .segmented button,
   .link-button,
   .bar-action {
-    transition: background-color 160ms ease-out, color 160ms ease-out, outline-color 160ms ease-out;
+    transition: background-color 160ms ease-out, box-shadow 160ms ease-out, color 160ms ease-out, outline-color 160ms ease-out, transform 160ms ease-out;
   }
 }

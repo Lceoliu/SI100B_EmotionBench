@@ -1,8 +1,8 @@
 FROM docker.m.daocloud.io/library/node:20-slim AS frontend
 
 WORKDIR /frontend
-COPY frontend/package.json ./
-RUN npm config set registry https://registry.npmmirror.com && npm install
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm config set registry https://registry.npmmirror.com && npm ci
 COPY frontend/ ./
 RUN npm run build
 

@@ -7,10 +7,13 @@ import os
 import secrets
 import shutil
 import struct
+import time
 import zipfile
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -26,12 +29,31 @@ CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", ROOT / "config.yaml"))
 STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", ROOT / "storage")).resolve()
 SUBMISSION_ROOT = STORAGE_ROOT / "submissions"
 INDEX_ROOT = STORAGE_ROOT / "index"
+RESOURCE_ROOT = STORAGE_ROOT / "resources"
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", ROOT / "frontend" / "dist")).resolve()
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{STORAGE_ROOT / 'bench.db'}")
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-emotion-bench-change-me")
 INVITE_CODE = os.environ.get("INVITE_CODE", "SI100B-2026")
+DOWNLOAD_LIMIT_PER_MINUTE = int(os.environ.get("DOWNLOAD_LIMIT_PER_MINUTE", "40"))
+AUTH_LIMIT_PER_MINUTE = int(os.environ.get("AUTH_LIMIT_PER_MINUTE", "20"))
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
+DOWNLOAD_EVENTS: defaultdict[str, deque[float]] = defaultdict(deque)
+AUTH_EVENTS: defaultdict[str, deque[float]] = defaultdict(deque)
+MUTATION_NONCES: defaultdict[str, deque[tuple[str, float]]] = defaultdict(deque)
+
+RESOURCE_MANIFEST = [
+    {"id": "lab1", "title": "Lab 1：环境配置与图像基础", "filename": "lab1.pdf"},
+    {"id": "lab2", "title": "Lab 2：OpenCV 基本操作", "filename": "lab2.pdf"},
+    {"id": "lab3", "title": "Lab 3：模型训练", "filename": "lab3.pdf"},
+    {"id": "lab4", "title": "Lab 4：模型推理", "filename": "lab4.pdf"},
+    {"id": "lab5", "title": "Lab 5：端到端流程", "filename": "lab5.pdf"},
+    {"id": "lab6", "title": "Lab 6：Matplotlib 可视化", "filename": "lab6.pdf"},
+    {"id": "lab7", "title": "Lab 7：数据标注的重要性", "filename": "lab7.pdf"},
+    {"id": "lab8", "title": "Lab 8：扩展主题", "filename": "lab8.pdf"},
+    {"id": "project-rules", "title": "项目评分完整规则", "filename": "face-emotion-project-rules.pdf"},
+]
 
 
 class Base(DeclarativeBase):
@@ -102,6 +124,16 @@ app = FastAPI(title="EmotionBench", version="0.1-dev")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    return response
+
+
 def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         return {}
@@ -134,6 +166,70 @@ def user_payload(user: User) -> dict[str, Any]:
         "role": user.role,
         "group_name": user.group_name or "",
     }
+
+
+def ensure_csrf_token(request: Request) -> str:
+    token = request.session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        request.session["csrf_token"] = token
+    return str(token)
+
+
+def client_key(request: Request, scope: str) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip = forwarded.split(",", 1)[0].strip() or (request.client.host if request.client else "unknown")
+    return f"{scope}:{ip}"
+
+
+def check_rate_limit(events: defaultdict[str, deque[float]], key: str, limit: int, window_seconds: int = 60) -> None:
+    now = time.time()
+    bucket = events[key]
+    while bucket and bucket[0] <= now - window_seconds:
+        bucket.popleft()
+    if len(bucket) >= limit:
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试。")
+    bucket.append(now)
+
+
+def verify_same_origin(request: Request) -> None:
+    host = request.headers.get("host")
+    if not host:
+        return
+    for header_name in ("origin", "referer"):
+        value = request.headers.get(header_name)
+        if not value:
+            continue
+        parsed = urlparse(value)
+        if parsed.netloc and parsed.netloc != host:
+            raise HTTPException(status_code=403, detail="请求来源不合法。")
+
+
+def verify_mutation_request(request: Request) -> None:
+    verify_same_origin(request)
+    expected = request.session.get("csrf_token")
+    supplied = request.headers.get("x-csrf-token")
+    if not expected or not supplied or not secrets.compare_digest(str(expected), str(supplied)):
+        raise HTTPException(status_code=403, detail="安全令牌无效，请刷新页面后重试。")
+
+    nonce = request.headers.get("x-request-nonce", "")
+    if len(nonce) < 12 or len(nonce) > 128:
+        raise HTTPException(status_code=403, detail="请求 nonce 无效。")
+    try:
+        request_time = int(request.headers.get("x-request-time", "0")) / 1000
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="请求时间戳无效。") from exc
+    now = time.time()
+    if abs(now - request_time) > 300:
+        raise HTTPException(status_code=403, detail="请求已过期，请刷新页面后重试。")
+
+    key = f"{request.session.get('user_id', 'anon')}:{str(expected)[:16]}"
+    seen = MUTATION_NONCES[key]
+    while seen and seen[0][1] <= now - 300:
+        seen.popleft()
+    if any(item == nonce for item, _ in seen):
+        raise HTTPException(status_code=409, detail="检测到重复请求，请刷新页面后重试。")
+    seen.append((nonce, now))
 
 
 def submission_payload(submission: Submission, reveal_private: bool = False) -> dict[str, Any]:
@@ -316,6 +412,27 @@ def validate_package(file_bytes: bytes, filename: str) -> dict[str, Any]:
             raise ValueError(f"Model has {param_count:,} parameters; limit is {max_params:,}.")
     return {"param_count": param_count, "weight_mb": weight_mb, "tensor_count": len(header)}
 
+
+def resource_payload(item: dict[str, str]) -> dict[str, Any]:
+    path = (RESOURCE_ROOT / item["filename"]).resolve()
+    available = path.is_file() and RESOURCE_ROOT in path.parents
+    return {
+        "id": item["id"],
+        "title": item["title"],
+        "filename": item["filename"],
+        "available": available,
+        "size": path.stat().st_size if available else 0,
+        "download_url": f"/api/resources/{item['id']}/download" if available else None,
+    }
+
+
+def find_resource(resource_id: str) -> dict[str, str]:
+    for item in RESOURCE_MANIFEST:
+        if item["id"] == resource_id:
+            return item
+    raise HTTPException(status_code=404, detail="资源不存在。")
+
+
 def seed_demo_data(db: Session) -> None:
     ensure_admin_user(db)
     normalize_demo_users(db)
@@ -411,6 +528,7 @@ def startup() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     SUBMISSION_ROOT.mkdir(parents=True, exist_ok=True)
     INDEX_ROOT.mkdir(parents=True, exist_ok=True)
+    RESOURCE_ROOT.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
     ensure_schema()
     with SessionLocal() as db:
@@ -439,15 +557,37 @@ def api_config() -> dict[str, Any]:
     return visible
 
 
+@app.get("/api/resources")
+def api_resources() -> dict[str, Any]:
+    return {"rows": [resource_payload(item) for item in RESOURCE_MANIFEST]}
+
+
+@app.api_route("/api/resources/{resource_id}/download", methods=["GET", "HEAD"])
+def download_resource(resource_id: str, request: Request) -> FileResponse:
+    check_rate_limit(DOWNLOAD_EVENTS, client_key(request, "download"), DOWNLOAD_LIMIT_PER_MINUTE)
+    item = find_resource(resource_id)
+    path = (RESOURCE_ROOT / item["filename"]).resolve()
+    if not path.is_file() or RESOURCE_ROOT not in path.parents:
+        raise HTTPException(status_code=404, detail="资源文件尚未上传。")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=item["filename"],
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 @app.get("/api/session")
 def session_info(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     user_id = request.session.get("user_id")
     user = db.get(User, int(user_id)) if user_id else None
-    return {"user": user_payload(user) if user else None}
+    return {"user": user_payload(user) if user else None, "csrf_token": ensure_csrf_token(request)}
 
 
 @app.post("/api/auth/register")
 async def register(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_same_origin(request)
+    check_rate_limit(AUTH_EVENTS, client_key(request, "auth"), AUTH_LIMIT_PER_MINUTE)
     data = await request.json()
     if data.get("invite_code") != INVITE_CODE:
         raise HTTPException(status_code=400, detail="邀请码无效。")
@@ -463,11 +603,13 @@ async def register(request: Request, db: Session = Depends(get_db)) -> dict[str,
     db.commit()
     db.refresh(user)
     request.session["user_id"] = user.id
-    return {"user": user_payload(user)}
+    return {"user": user_payload(user), "csrf_token": ensure_csrf_token(request)}
 
 
 @app.post("/api/auth/login")
 async def login(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_same_origin(request)
+    check_rate_limit(AUTH_EVENTS, client_key(request, "auth"), AUTH_LIMIT_PER_MINUTE)
     data = await request.json()
     student_id = str(data.get("email") or data.get("student_id") or "").strip().lower()
     password = str(data.get("password", ""))
@@ -475,11 +617,12 @@ async def login(request: Request, db: Session = Depends(get_db)) -> dict[str, An
     if not user or not pwd_context.verify(password, user.password_hash):
         raise HTTPException(status_code=401, detail="账号或密码错误。")
     request.session["user_id"] = user.id
-    return {"user": user_payload(user)}
+    return {"user": user_payload(user), "csrf_token": ensure_csrf_token(request)}
 
 
 @app.post("/api/auth/logout")
 def logout(request: Request) -> dict[str, Any]:
+    verify_same_origin(request)
     request.session.clear()
     return {"ok": True}
 
@@ -537,11 +680,13 @@ def my_group(user: User = Depends(current_user), db: Session = Depends(get_db)) 
 
 @app.post("/api/submissions")
 async def create_submission(
+    request: Request,
     mode: str = Form("public"),
     package: UploadFile = File(...),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    verify_mutation_request(request)
     if mode not in {"public", "dry-run"}:
         raise HTTPException(status_code=400, detail="未知提交模式。")
     if not package.filename or not package.filename.endswith(".zip"):
@@ -604,7 +749,8 @@ async def create_submission(
 
 
 @app.post("/api/submissions/{submission_id}/final")
-def mark_final(submission_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+def mark_final(submission_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
     submission = db.get(Submission, submission_id)
     if not submission or submission.user_id != user.id:
         raise HTTPException(status_code=404, detail="提交记录不存在。")
@@ -625,7 +771,8 @@ def admin_queue(_: User = Depends(admin_user), db: Session = Depends(get_db)) ->
 
 
 @app.post("/api/admin/sync")
-def admin_sync(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+def admin_sync(request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
     return write_sync_index(db)
 
 
@@ -642,6 +789,7 @@ def admin_students(_: User = Depends(admin_user), db: Session = Depends(get_db))
 
 @app.patch("/api/admin/students/{user_id}/group")
 async def admin_update_group(user_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
     data = await request.json()
     group_name = str(data.get("group_name", "")).strip()
     user = db.get(User, user_id)
@@ -657,6 +805,7 @@ async def admin_update_group(user_id: int, request: Request, _: User = Depends(a
 
 @app.post("/api/admin/groups/bulk")
 async def admin_bulk_groups(request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
     data = await request.json()
     assignments = data.get("assignments", [])
     if not isinstance(assignments, list):
