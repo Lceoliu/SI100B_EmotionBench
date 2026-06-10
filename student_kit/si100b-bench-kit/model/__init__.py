@@ -15,7 +15,7 @@ NUM_CLASSES = 7
 
 
 # =========================
-# 路线 A：我只想跑通
+# 路线 A：我只想跑通，直接写个简单模型
 # =========================
 class SimpleCNN(nn.Module):
     def __init__(self, channels: int = 32, dropout: float = 0.1):
@@ -50,7 +50,7 @@ def build_model() -> nn.Module:
 # =========================
 # 路线 B：我想用现成强模型
 # =========================
-# 需要先 pip install timm。服务器 dry-run/正式评测也已安装 timm。
+# 需要先 pip install timm。
 #
 # import timm
 #
@@ -63,11 +63,11 @@ def build_model() -> nn.Module:
 
 
 # =========================
-# 路线 C：我想用 GitHub 模型代码
+# 路线 C：我想用更复杂的模型代码！（推荐）
 # =========================
-# 1. 把模型 .py 文件复制进 model/ 目录。
+# 1. 把模型等 .py 文件复制进 model/ 目录。
 # 2. 在这里 import 它。
-# 3. 在 build_model() 里创建模型，并确保分类头是 7 类。
+# 3. 最终只要保证在 build_model() 里创建模型，并确保分类头是 7 类。
 #
 # from .my_network import MyNetwork
 #

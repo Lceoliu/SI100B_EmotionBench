@@ -1,3 +1,4 @@
+# 请不要改动这个文件，除非你知道自己在做什么！如果你不确定，请先在 model/__init__.py 里修改模型代码，确保 check 和 score 都通过后再运行 pack。改动这个文件可能导致评测服务器无法正确评分，甚至无法解压提交包。
 from __future__ import annotations
 
 import argparse

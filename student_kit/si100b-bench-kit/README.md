@@ -28,6 +28,8 @@ model/__init__.py
 - 路线 B：用 timm 现成模型，只改模型名。
 - 路线 C：把 GitHub 找到的模型代码复制进 `model/` 后 import。
 
+服务器评测镜像已预装常用图像与训练辅助库，包括 `timm`、`opencv-python-headless`、`matplotlib`、`tqdm`、`pandas`、`scipy`。提交包仍然只应包含推理所需代码和权重，不要在 `model/` 中写训练、下载或文件系统扫描逻辑。
+
 无论哪条路线，都必须满足：
 
 - `build_model()` 不接受参数，返回 `torch.nn.Module`。

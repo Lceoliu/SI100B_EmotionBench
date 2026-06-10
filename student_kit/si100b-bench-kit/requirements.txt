@@ -5,3 +5,8 @@ pillow
 numpy
 scikit-learn
 timm
+opencv-python-headless
+matplotlib
+tqdm
+pandas
+scipy
