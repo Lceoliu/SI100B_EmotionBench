@@ -1,5 +1,5 @@
---index-url https://download.pytorch.org/whl/cu121
---extra-index-url https://pypi.org/simple
+服务器评测环境核心依赖：
+
 torch==2.4.0
 torchvision==0.19.0
 safetensors==0.4.5
@@ -8,3 +8,7 @@ scikit-learn==1.5.2
 pillow==11.0.0
 PyYAML==6.0.2
 timm==1.0.12
+
+输入尺寸：224
+类别数：7
+权重格式：safetensors

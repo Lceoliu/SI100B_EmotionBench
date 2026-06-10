@@ -40,6 +40,11 @@ const statusLabels = {
   validated: '已验证'
 };
 
+const modeLabels = {
+  public: '正式提交',
+  'dry-run': 'Dry-run'
+};
+
 const lectureItems = [
   { title: '环境配置与图像基础', detail: '安装必要环境，理解图像读取、像素、通道和基本数据结构。', resourceId: 'lab1' },
   { title: 'OpenCV 基本操作', detail: '读写图像、缩放、绘制图形，并接触级联分类器做人脸检测。', resourceId: 'lab2' },
@@ -161,6 +166,7 @@ function HomePage({ resources }) {
     return next;
   }, [resources]);
   const projectRules = resourceMap.get('project-rules');
+  const studentKit = resourceMap.get('student-kit');
 
   return (
     <div className="home-stack">
@@ -229,6 +235,12 @@ function HomePage({ resources }) {
             <ExternalLink size={18} />
             <span>Blackboard 课程资源</span>
           </a>
+          {studentKit?.available && (
+            <a className="resource-link" href={studentKit.download_url}>
+              <Download size={18} />
+              <span>学生本地评测工具包</span>
+            </a>
+          )}
           {/* <div className="resource-note">
             <strong>建议补充阅读</strong>
             <p>复习 OpenCV 图像读写和 resize、PyTorch Dataset/DataLoader、模型保存与加载、Matplotlib 可视化，以及 safetensors 模型权重格式。</p>
@@ -458,7 +470,7 @@ function SubmitPanel({ user, config, onCreated }) {
             <ClipboardCheck size={18} />
             <div>
               <strong>压缩包要求</strong>
-              <p>ZIP 内必须包含 <code>model.py</code> 和 <code>model.safetensors</code>。平台会先检查危险导入、权重格式和参数量，再决定是否进入公开集评测队列。</p>
+              <p>ZIP 内必须包含 <code>model.py</code> 和 <code>model.safetensors</code>。第一次提交请先 dry-run：dry-run 会进入真实沙箱做兼容性检查，不计分、不占每日配额。</p>
             </div>
           </div>
           <label className="file-input">
@@ -468,10 +480,10 @@ function SubmitPanel({ user, config, onCreated }) {
           </label>
           <div className="segmented mode-select">
             <button type="button" className={mode === 'public' ? 'active' : ''} onClick={() => setMode('public')}>
-              进入公开队列
+              正式提交
             </button>
             <button type="button" className={mode === 'dry-run' ? 'active' : ''} onClick={() => setMode('dry-run')}>
-              仅静态检查
+              先 dry-run
             </button>
           </div>
           {error && <p className="form-error">{error}</p>}
@@ -498,6 +510,7 @@ function MyRuns({ rows, onRefresh, onFinal }) {
   const columns = [
     { key: 'id', label: 'ID' },
     { key: 'filename', label: '文件' },
+    { key: 'mode', label: '模式', render: (row) => modeLabels[row.mode] || row.mode || '正式提交' },
     { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
     { key: 'public_score', label: '公开分数', render: (row) => fmtScore(row.public_score) },
     { key: 'param_count', label: '参数量', render: (row) => fmtParams(row.param_count) },
@@ -701,6 +714,7 @@ function OpsPanel({ queueRows, students, invites, config, onSaveGroup, onToggleD
     { key: 'email', label: '邮箱' },
     { key: 'display_name', label: '姓名/队名' },
     { key: 'group_name', label: '小组', render: (row) => row.group_name || '—' },
+    { key: 'mode', label: '模式', render: (row) => modeLabels[row.mode] || row.mode || '正式提交' },
     { key: 'filename', label: '文件' },
     { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
     { key: 'message', label: '信息' },

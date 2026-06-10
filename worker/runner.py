@@ -90,7 +90,20 @@ def run_static_check(package_dir: Path) -> None:
     validate_model_py(model_files[0].read_text(encoding="utf-8"))
 
 
-def available_splits() -> list[tuple[str, Path, Path]]:
+def available_splits(mode: str) -> list[tuple[str, Path, Path | None]]:
+    if mode == "dry-run":
+        images_dir = DATA_ROOT / "dryrun" / "images"
+        labels_path = DATA_ROOT / "dryrun" / "labels.csv"
+        image_files = []
+        if images_dir.exists():
+            image_files = [
+                path
+                for path in images_dir.iterdir()
+                if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+            ]
+        if image_files:
+            return [("dryrun", images_dir, labels_path if labels_path.exists() else None)]
+        raise RuntimeError("dry-run 样例数据未配置：需要 data/dryrun/images 下至少一张样例图片。请联系 TA。")
     splits = []
     for split in ("public", "private", "realworld"):
         split_dir = DATA_ROOT / split
@@ -169,14 +182,15 @@ def evaluate_submission(submission_id: int) -> None:
     cfg = load_config()
     timeout_sec = int(cfg.get("eval_timeout_sec", 600))
     num_classes = int(cfg.get("num_classes", 7))
-    splits = available_splits()
-    if not splits:
-        raise RuntimeError("没有找到可评测数据：需要 data/<split>/images 和 data/<split>/labels.csv")
 
     with SessionLocal() as db:
         submission = db.get(Submission, submission_id)
         if submission is None:
             raise RuntimeError(f"submission not found: {submission_id}")
+        mode = submission.mode or "public"
+        splits = available_splits(mode)
+        if not splits:
+            raise RuntimeError("没有找到可评测数据：需要 data/<split>/images 和 data/<split>/labels.csv")
         package_dir = package_dir_for(submission)
         submission.message = "Running static safety checks."
         db.commit()
@@ -198,16 +212,23 @@ def evaluate_submission(submission_id: int) -> None:
         output = run_eval_container(package_dir, images_dir, out_dir, timeout_sec, cfg)
         (logs_dir / f"{split}.log").write_bytes(output)
         predictions_path = out_dir / "predictions.json"
-        metrics = score_predictions(labels_path, predictions_path, num_classes)
-        (out_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
-        split_metrics[split] = metrics
+        if labels_path is not None:
+            metrics = score_predictions(labels_path, predictions_path, num_classes)
+            (out_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+            split_metrics[split] = metrics
 
-        with SessionLocal() as db:
-            upsert_score(db, submission_id, split, metrics, predictions_path)
-            db.commit()
+            with SessionLocal() as db:
+                upsert_score(db, submission_id, split, metrics, predictions_path)
+                db.commit()
 
     with SessionLocal() as db:
         submission = db.get(Submission, submission_id)
+        if (submission.mode or "public") == "dry-run":
+            submission.status = "validated"
+            submission.message = "Dry-run sandbox passed."
+            db.commit()
+            write_sync_index(db)
+            return
         public = split_metrics.get("public")
         private = split_metrics.get("private")
         realworld = split_metrics.get("realworld")

@@ -1,0 +1,7 @@
+torch
+torchvision
+safetensors
+pillow
+numpy
+scikit-learn
+timm

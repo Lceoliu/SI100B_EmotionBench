@@ -44,6 +44,7 @@ AUTH_EVENTS: defaultdict[str, deque[float]] = defaultdict(deque)
 MUTATION_NONCES: defaultdict[str, deque[tuple[str, float]]] = defaultdict(deque)
 
 RESOURCE_MANIFEST = [
+    {"id": "student-kit", "title": "学生本地评测工具包", "filename": "si100b-bench-kit-v0.1.zip", "media_type": "application/zip"},
     {"id": "lab1", "title": "Lab 1：环境配置与图像基础", "filename": "lab1.pdf"},
     {"id": "lab2", "title": "Lab 2：OpenCV 基本操作", "filename": "lab2.pdf"},
     {"id": "lab3", "title": "Lab 3：模型训练", "filename": "lab3.pdf"},
@@ -90,6 +91,7 @@ class Submission(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     filename: Mapped[str] = mapped_column(String(255))
+    mode: Mapped[str] = mapped_column(String(24), default="public", index=True)
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     message: Mapped[str] = mapped_column(Text, default="")
     package_path: Mapped[str] = mapped_column(Text)
@@ -260,6 +262,7 @@ def submission_payload(submission: Submission, reveal_private: bool = False) -> 
         "display_name": submission.user.display_name,
         "group_name": submission.user.group_name or "",
         "filename": submission.filename,
+        "mode": submission.mode,
         "status": submission.status,
         "message": submission.message,
         "param_count": submission.param_count,
@@ -453,6 +456,7 @@ def resource_payload(item: dict[str, str]) -> dict[str, Any]:
         "id": item["id"],
         "title": item["title"],
         "filename": item["filename"],
+        "media_type": item.get("media_type", "application/pdf"),
         "available": available,
         "size": path.stat().st_size if available else 0,
         "download_url": f"/api/resources/{item['id']}/download" if available else None,
@@ -540,6 +544,10 @@ def ensure_schema() -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN group_name VARCHAR(120) DEFAULT '' NOT NULL"))
         if rows and "disabled" not in column_names:
             conn.execute(text("ALTER TABLE users ADD COLUMN disabled BOOLEAN DEFAULT 0 NOT NULL"))
+        rows = conn.execute(text("PRAGMA table_info(submissions)")).mappings().all()
+        submission_columns = {row["name"] for row in rows}
+        if rows and "mode" not in submission_columns:
+            conn.execute(text("ALTER TABLE submissions ADD COLUMN mode VARCHAR(24) DEFAULT 'public' NOT NULL"))
 
 
 @app.on_event("startup")
@@ -590,7 +598,7 @@ def download_resource(resource_id: str, request: Request) -> FileResponse:
         raise HTTPException(status_code=404, detail="资源文件尚未上传。")
     return FileResponse(
         path,
-        media_type="application/pdf",
+        media_type=item.get("media_type", "application/pdf"),
         filename=item["filename"],
         headers={"Cache-Control": "private, max-age=3600"},
     )
@@ -661,7 +669,7 @@ def leaderboard_rows_payload(db: Session, reveal_private: bool = False) -> list[
     rows = db.scalars(
         select(Submission)
         .join(User)
-        .where(Submission.status.in_(["passed", "final"]))
+        .where(Submission.mode == "public", Submission.status.in_(["passed", "final"]))
         .order_by(Submission.public_score.desc().nullslast(), Submission.created_at.asc())
     ).all()
     best_by_user: dict[int, Submission] = {}
@@ -739,6 +747,7 @@ async def create_submission(
     today_count = db.scalar(
         select(func.count(Submission.id)).where(
             Submission.user_id == user.id,
+            Submission.mode == "public",
             func.date(Submission.created_at) == today.isoformat(),
             Submission.status != "rejected",
         )
@@ -772,11 +781,12 @@ async def create_submission(
         zf.extractall(submit_dir / "package")
     (submit_dir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-    status = "queued" if mode == "public" else "validated"
-    message = "Queued for public evaluation." if mode == "public" else "Package passed static checks; not queued."
+    status = "queued"
+    message = "Queued for public evaluation." if mode == "public" else "Queued for dry-run sandbox compatibility check."
     submission = Submission(
         user_id=user.id,
         filename=Path(package.filename).name,
+        mode=mode,
         status=status,
         message=message,
         package_path=str(archive_path),
