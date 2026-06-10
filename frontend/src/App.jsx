@@ -1,5 +1,6 @@
 import {
   Activity,
+  Ban,
   BookOpen,
   ClipboardCheck,
   Database,
@@ -10,8 +11,11 @@ import {
   ListChecks,
   LogIn,
   LogOut,
+  KeyRound,
+  Plus,
   ShieldCheck,
   Table2,
+  Trash2,
   UploadCloud,
   Users
 } from 'lucide-react';
@@ -178,7 +182,9 @@ function HomePage({ resources }) {
                 <a href="https://sist.shanghaitech.edu.cn/lzh/main.htm" target="_blank" rel="noreferrer">李正浩</a>
               </small></li>
             <li><span>TA</span>
-              <a href="https://lceoliu.github.io/" target="_blank" rel="noreferrer">刘畅</a>，<a href="" target="_blank" rel="noreferrer">张境轩</a>
+              <span className="ta-line">
+                <a href="https://lceoliu.github.io/" target="_blank" rel="noreferrer">刘畅</a>，<a href="" target="_blank" rel="noreferrer">张境轩</a>
+              </span>
             </li>
           </ol>
         </div>
@@ -320,6 +326,7 @@ function AuthPanel({ user, onSession, onAfterLogin }) {
             <input value={form.invite_code} onChange={(e) => setForm({ ...form, invite_code: e.target.value })} />
           </label>
         )}
+        {mode === 'register' && <p className="hint-text">仅支持 @shanghaitech.edu.cn 邮箱注册。</p>}
         {error && <p className="form-error">{error}</p>}
         <button className="button primary full" disabled={busy}>
           <LogIn size={16} /> {busy ? '处理中' : mode === 'login' ? '登录' : '创建账号'}
@@ -485,8 +492,9 @@ function MyRuns({ rows, onRefresh, onFinal }) {
   );
 }
 
-function StudentManager({ students, onSaveGroup }) {
+function StudentManager({ students, onSaveGroup, onToggleDisabled, onResetPassword }) {
   const [drafts, setDrafts] = useState({});
+  const [passwords, setPasswords] = useState({});
 
   useEffect(() => {
     const next = {};
@@ -500,6 +508,15 @@ function StudentManager({ students, onSaveGroup }) {
     { key: 'display_name', label: '姓名/队名' },
     { key: 'email', label: '邮箱' },
     {
+      key: 'disabled',
+      label: '账号',
+      render: (row) => (
+        <span className={`status ${row.disabled ? 'status-danger' : 'status-success'}`}>
+          {row.disabled ? '已禁用' : '可登录'}
+        </span>
+      )
+    },
+    {
       key: 'group_name',
       label: '小组',
       render: (row) => (
@@ -512,12 +529,40 @@ function StudentManager({ students, onSaveGroup }) {
       )
     },
     {
-      key: 'action',
-      label: '操作',
+      key: 'password',
+      label: '重置密码',
       render: (row) => (
-        <button className="link-button" onClick={() => onSaveGroup(row.id, drafts[row.id] ?? '')}>
-          保存
-        </button>
+        <div className="inline-actions">
+          <input
+            className="table-input password-input"
+            type="password"
+            value={passwords[row.id] ?? ''}
+            onChange={(event) => setPasswords({ ...passwords, [row.id]: event.target.value })}
+            placeholder="至少 8 位"
+          />
+          <button
+            className="link-button"
+            onClick={() => onResetPassword(row.id, passwords[row.id] ?? '').then((ok) => {
+              if (ok) setPasswords({ ...passwords, [row.id]: '' });
+            })}
+          >
+            <KeyRound size={14} /> 重置
+          </button>
+        </div>
+      )
+    },
+    {
+      key: 'actions',
+      label: '管理',
+      render: (row) => (
+        <div className="inline-actions">
+          <button className="link-button" onClick={() => onSaveGroup(row.id, drafts[row.id] ?? '')}>
+            保存分组
+          </button>
+          <button className="link-button danger-link" onClick={() => onToggleDisabled(row.id, !row.disabled)}>
+            <Ban size={14} /> {row.disabled ? '启用' : '禁用'}
+          </button>
+        </div>
       )
     }
   ];
@@ -533,7 +578,55 @@ function StudentManager({ students, onSaveGroup }) {
   );
 }
 
-function OpsPanel({ queueRows, students, config, onSaveGroup }) {
+function InviteManager({ invites, onCreateInvite, onDeleteInvite }) {
+  const [form, setForm] = useState({ code: '', label: '' });
+
+  async function submit(event) {
+    event.preventDefault();
+    const ok = await onCreateInvite(form);
+    if (ok) setForm({ code: '', label: '' });
+  }
+
+  const columns = [
+    { key: 'code', label: '邀请码', render: (row) => <code>{row.code}</code> },
+    { key: 'label', label: '说明', render: (row) => row.label || '—' },
+    { key: 'created_at', label: '创建时间', render: (row) => fmtTime(row.created_at) },
+    {
+      key: 'action',
+      label: '操作',
+      render: (row) => (
+        <button className="link-button danger-link" onClick={() => onDeleteInvite(row.id)}>
+          <Trash2 size={14} /> 删除
+        </button>
+      )
+    }
+  ];
+
+  return (
+    <section className="window">
+      <header className="window-bar">
+        <span>注册邀请码</span>
+        <small>管理员维护可用邀请码</small>
+      </header>
+      <form className="invite-form" onSubmit={submit}>
+        <label>
+          邀请码
+          <input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} placeholder="例如 SI100B-2026" />
+        </label>
+        <label>
+          说明
+          <input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="例如 第一批学生" />
+        </label>
+        <button className="button primary">
+          <Plus size={16} /> 添加
+        </button>
+      </form>
+      <DataTable columns={columns} rows={invites} empty="暂无可用邀请码。" />
+    </section>
+  );
+}
+
+function OpsPanel({ queueRows, students, invites, config, onSaveGroup, onToggleDisabled, onResetPassword, onCreateInvite, onDeleteInvite }) {
   const columns = [
     { key: 'id', label: 'ID' },
     { key: 'email', label: '邮箱' },
@@ -558,7 +651,8 @@ function OpsPanel({ queueRows, students, config, onSaveGroup }) {
         </div>
         <DataTable columns={columns} rows={queueRows} empty="暂无评测队列记录。" />
       </section>
-      <StudentManager students={students} onSaveGroup={onSaveGroup} />
+      <StudentManager students={students} onSaveGroup={onSaveGroup} onToggleDisabled={onToggleDisabled} onResetPassword={onResetPassword} />
+      <InviteManager invites={invites} onCreateInvite={onCreateInvite} onDeleteInvite={onDeleteInvite} />
     </div>
   );
 }
@@ -570,6 +664,7 @@ function App() {
   const [mine, setMine] = useState([]);
   const [queue, setQueue] = useState([]);
   const [students, setStudents] = useState([]);
+  const [invites, setInvites] = useState([]);
   const [resources, setResources] = useState([]);
   const [group, setGroup] = useState({ group_name: '', mates: [] });
   const [config, setConfig] = useState({});
@@ -613,14 +708,17 @@ function App() {
     if (currentUser?.role !== 'admin') {
       setQueue([]);
       setStudents([]);
+      setInvites([]);
       return;
     }
-    const [queuePayload, studentsPayload] = await Promise.all([
+    const [queuePayload, studentsPayload, invitesPayload] = await Promise.all([
       api('/api/admin/queue'),
-      api('/api/admin/students')
+      api('/api/admin/students'),
+      api('/api/admin/invites')
     ]);
     setQueue(queuePayload.rows || []);
     setStudents(studentsPayload.rows || []);
+    setInvites(invitesPayload.rows || []);
   }
 
   useEffect(() => {
@@ -671,6 +769,58 @@ function App() {
       });
       await loadAdmin(user);
       setNotice('分组已保存');
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function toggleDisabled(userId, disabled) {
+    try {
+      await api(`/api/admin/students/${userId}/disabled`, {
+        method: 'PATCH',
+        body: JSON.stringify({ disabled })
+      });
+      await loadAdmin(user);
+      setNotice(disabled ? '账号已禁用' : '账号已启用');
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function resetPassword(userId, password) {
+    try {
+      await api(`/api/admin/students/${userId}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ password })
+      });
+      setNotice('密码已重置');
+      return true;
+    } catch (err) {
+      setNotice(err.message);
+      return false;
+    }
+  }
+
+  async function createInvite(form) {
+    try {
+      await api('/api/admin/invites', {
+        method: 'POST',
+        body: JSON.stringify(form)
+      });
+      await loadAdmin(user);
+      setNotice('邀请码已添加');
+      return true;
+    } catch (err) {
+      setNotice(err.message);
+      return false;
+    }
+  }
+
+  async function deleteInvite(inviteId) {
+    try {
+      await api(`/api/admin/invites/${inviteId}`, { method: 'DELETE' });
+      await loadAdmin(user);
+      setNotice('邀请码已删除');
     } catch (err) {
       setNotice(err.message);
     }
@@ -727,7 +877,19 @@ function App() {
           {active === 'leaderboard' && <Leaderboard rows={leaderboard} />}
           {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} />}
           {active === 'runs' && <MyRuns rows={mine} onRefresh={() => loadMine(user)} onFinal={markFinal} />}
-          {active === 'ops' && user?.role === 'admin' && <OpsPanel queueRows={queue} students={students} config={config} onSaveGroup={saveGroup} />}
+          {active === 'ops' && user?.role === 'admin' && (
+            <OpsPanel
+              queueRows={queue}
+              students={students}
+              invites={invites}
+              config={config}
+              onSaveGroup={saveGroup}
+              onToggleDisabled={toggleDisabled}
+              onResetPassword={resetPassword}
+              onCreateInvite={createInvite}
+              onDeleteInvite={deleteInvite}
+            />
+          )}
         </section>
 
         <aside className="utility">
@@ -745,9 +907,7 @@ function App() {
       </main>
 
       <footer className="statusbar">
-        <span>提交归档：storage/submissions</span>
-        <span>公开标签与私有评测集隔离</span>
-        <span>{new Date().toLocaleDateString('zh-CN')}</span>
+        <span>© 2026 Chang LIU · Licensed under Apache-2.0</span>
       </footer>
     </div>
   );

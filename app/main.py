@@ -69,9 +69,19 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(24), default="student")
     group_name: Mapped[str] = mapped_column(String(120), default="")
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     submissions: Mapped[list["Submission"]] = relationship(back_populates="user")
+
+
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(160), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class Submission(Base):
@@ -165,6 +175,16 @@ def user_payload(user: User) -> dict[str, Any]:
         "display_name": user.display_name,
         "role": user.role,
         "group_name": user.group_name or "",
+        "disabled": bool(user.disabled),
+    }
+
+
+def invite_payload(invite: InviteCode) -> dict[str, Any]:
+    return {
+        "id": invite.id,
+        "code": invite.code,
+        "label": invite.label or "",
+        "created_at": now_iso(invite.created_at),
     }
 
 
@@ -302,6 +322,9 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not user:
         request.session.clear()
         raise HTTPException(status_code=401, detail="登录状态已失效。")
+    if user.disabled:
+        request.session.clear()
+        raise HTTPException(status_code=403, detail="账号已被禁用，请联系 TA。")
     return user
 
 
@@ -435,6 +458,7 @@ def find_resource(resource_id: str) -> dict[str, str]:
 
 def seed_demo_data(db: Session) -> None:
     ensure_admin_user(db)
+    ensure_default_invite_code(db)
     normalize_demo_users(db)
     if db.scalar(select(func.count(User.id)).where(User.role == "student")) > 0:
         return
@@ -466,6 +490,16 @@ def seed_demo_data(db: Session) -> None:
     db.commit()
 
 
+def ensure_default_invite_code(db: Session) -> None:
+    code = INVITE_CODE.strip()
+    if not code:
+        return
+    existing = db.scalar(select(InviteCode).where(InviteCode.code == code))
+    if existing is None:
+        db.add(InviteCode(code=code, label="默认邀请码"))
+        db.commit()
+
+
 def ensure_admin_user(db: Session) -> None:
     legacy_ta = db.scalar(select(User).where(User.student_id == "TA"))
     if legacy_ta is not None:
@@ -490,6 +524,7 @@ def ensure_admin_user(db: Session) -> None:
         admin.display_name = "TA 管理员"
         admin.role = "admin"
         admin.group_name = "TA"
+        admin.disabled = False
         admin.password_hash = pwd_context.hash("wo598053345@")
     db.commit()
 
@@ -521,6 +556,8 @@ def ensure_schema() -> None:
         column_names = {row["name"] for row in rows}
         if rows and "group_name" not in column_names:
             conn.execute(text("ALTER TABLE users ADD COLUMN group_name VARCHAR(120) DEFAULT '' NOT NULL"))
+        if rows and "disabled" not in column_names:
+            conn.execute(text("ALTER TABLE users ADD COLUMN disabled BOOLEAN DEFAULT 0 NOT NULL"))
 
 
 @app.on_event("startup")
@@ -589,11 +626,14 @@ async def register(request: Request, db: Session = Depends(get_db)) -> dict[str,
     verify_same_origin(request)
     check_rate_limit(AUTH_EVENTS, client_key(request, "auth"), AUTH_LIMIT_PER_MINUTE)
     data = await request.json()
-    if data.get("invite_code") != INVITE_CODE:
+    invite_code = str(data.get("invite_code") or "").strip()
+    if not invite_code or not db.scalar(select(InviteCode).where(InviteCode.code == invite_code)):
         raise HTTPException(status_code=400, detail="邀请码无效。")
     student_id = str(data.get("email") or data.get("student_id") or "").strip().lower()
     display_name = str(data.get("display_name", "")).strip()
     password = str(data.get("password", ""))
+    if not student_id.endswith("@shanghaitech.edu.cn"):
+        raise HTTPException(status_code=400, detail="请使用 @shanghaitech.edu.cn 邮箱注册。")
     if "@" not in student_id or len(display_name) < 2 or len(password) < 8:
         raise HTTPException(status_code=400, detail="请填写有效邮箱、姓名，以及至少 8 位密码。")
     if db.scalar(select(User).where(User.student_id == student_id)):
@@ -616,6 +656,8 @@ async def login(request: Request, db: Session = Depends(get_db)) -> dict[str, An
     user = db.scalar(select(User).where(User.student_id == student_id))
     if not user or not pwd_context.verify(password, user.password_hash):
         raise HTTPException(status_code=401, detail="账号或密码错误。")
+    if user.disabled:
+        raise HTTPException(status_code=403, detail="账号已被禁用，请联系 TA。")
     request.session["user_id"] = user.id
     return {"user": user_payload(user), "csrf_token": ensure_csrf_token(request)}
 
@@ -787,6 +829,38 @@ def admin_students(_: User = Depends(admin_user), db: Session = Depends(get_db))
     return {"rows": [user_payload(item) for item in users], "groups": groups}
 
 
+@app.patch("/api/admin/students/{user_id}/disabled")
+async def admin_update_disabled(user_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    data = await request.json()
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在。")
+    if user.role == "admin":
+        raise HTTPException(status_code=400, detail="管理员账号不能被禁用。")
+    user.disabled = bool(data.get("disabled", False))
+    db.commit()
+    db.refresh(user)
+    return {"user": user_payload(user)}
+
+
+@app.post("/api/admin/students/{user_id}/reset-password")
+async def admin_reset_password(user_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    data = await request.json()
+    password = str(data.get("password", ""))
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="新密码至少需要 8 位。")
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在。")
+    if user.role == "admin":
+        raise HTTPException(status_code=400, detail="管理员密码不在学生管理中重置。")
+    user.password_hash = pwd_context.hash(password)
+    db.commit()
+    return {"ok": True, "user": user_payload(user)}
+
+
 @app.patch("/api/admin/students/{user_id}/group")
 async def admin_update_group(user_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     verify_mutation_request(request)
@@ -820,6 +894,40 @@ async def admin_bulk_groups(request: Request, _: User = Depends(admin_user), db:
             updated += 1
     db.commit()
     return {"updated": updated}
+
+
+@app.get("/api/admin/invites")
+def admin_invites(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    rows = db.scalars(select(InviteCode).order_by(InviteCode.created_at.desc())).all()
+    return {"rows": [invite_payload(row) for row in rows]}
+
+
+@app.post("/api/admin/invites")
+async def admin_create_invite(request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    data = await request.json()
+    code = str(data.get("code") or "").strip()
+    label = str(data.get("label") or "").strip()
+    if len(code) < 4 or len(code) > 120:
+        raise HTTPException(status_code=400, detail="邀请码长度需为 4 到 120 个字符。")
+    if db.scalar(select(InviteCode).where(InviteCode.code == code)):
+        raise HTTPException(status_code=409, detail="邀请码已存在。")
+    invite = InviteCode(code=code, label=label)
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+    return {"invite": invite_payload(invite)}
+
+
+@app.delete("/api/admin/invites/{invite_id}")
+def admin_delete_invite(invite_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    invite = db.get(InviteCode, invite_id)
+    if not invite:
+        raise HTTPException(status_code=404, detail="邀请码不存在。")
+    db.delete(invite)
+    db.commit()
+    return {"ok": True}
 
 
 if (FRONTEND_DIST / "assets").exists():

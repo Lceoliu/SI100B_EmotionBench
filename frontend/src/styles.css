@@ -511,6 +511,13 @@ input:focus-visible {
   line-height: 1.45;
 }
 
+.ta-line {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  white-space: nowrap;
+}
+
 .lecture-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -734,6 +741,37 @@ dd {
   padding: 4px 6px;
 }
 
+.password-input {
+  min-width: 130px;
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.danger-link {
+  color: var(--danger);
+}
+
+.danger-link:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+  outline-color: var(--danger);
+}
+
+.invite-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f8f8f4;
+}
+
 .ops-strip {
   display: flex;
   flex-wrap: wrap;
@@ -778,7 +816,7 @@ dd {
 
 .statusbar {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   gap: 12px;
   padding: 7px 14px;
   border-top: 1px solid var(--line);
@@ -787,7 +825,7 @@ dd {
   font-size: 0.78rem;
 }
 
-@media (max-width: 980px) {
+  @media (max-width: 980px) {
   .topbar {
     flex-direction: column;
     gap: 0;
@@ -816,6 +854,7 @@ dd {
   }
 
   .home-intro,
+  .invite-form,
   .resource-grid {
     grid-template-columns: 1fr;
   }
