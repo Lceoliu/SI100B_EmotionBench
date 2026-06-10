@@ -26,6 +26,8 @@ services:
     image: emotion-bench-web:dev
     init: true
     user: "1000:1000"
+    group_add:
+      - "126"
     profiles: ["worker"]
     environment:
       BENCH_ROOT: /workspace
@@ -38,3 +40,13 @@ services:
     working_dir: /workspace
     command: ["python", "-m", "worker.runner"]
     restart: unless-stopped
+
+
+  eval-image:
+    build:
+      context: .
+      dockerfile: docker/eval.Dockerfile
+    image: emotion-bench-eval:dev
+    gpus: all
+    profiles: ["eval"]
+    entrypoint: ["python", "/gpu_smoke_test.py"]
