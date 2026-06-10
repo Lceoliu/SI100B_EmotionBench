@@ -25,6 +25,7 @@ ROOT = Path(os.environ.get("BENCH_ROOT", ".")).resolve()
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", ROOT / "config.yaml"))
 STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", ROOT / "storage")).resolve()
 SUBMISSION_ROOT = STORAGE_ROOT / "submissions"
+INDEX_ROOT = STORAGE_ROOT / "index"
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", ROOT / "frontend" / "dist")).resolve()
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{STORAGE_ROOT / 'bench.db'}")
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-emotion-bench-change-me")
@@ -72,6 +73,25 @@ class Submission(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="submissions")
+
+
+class Score(Base):
+    __tablename__ = "scores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("submissions.id"), index=True)
+    split: Mapped[str] = mapped_column(String(24), index=True)
+    macro_f1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ci_low: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ci_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confusion_json: Mapped[str] = mapped_column(Text, default="[]")
+    per_class_json: Mapped[str] = mapped_column(Text, default="{}")
+    predictions_path: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
 
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
@@ -135,6 +155,47 @@ def submission_payload(submission: Submission, reveal_private: bool = False) -> 
         "created_at": now_iso(submission.created_at),
         "updated_at": now_iso(submission.updated_at),
     }
+
+
+def score_payload(score: Score) -> dict[str, Any]:
+    return {
+        "split": score.split,
+        "macro_f1": score.macro_f1,
+        "accuracy": score.accuracy,
+        "ci_low": score.ci_low,
+        "ci_high": score.ci_high,
+        "confusion": json.loads(score.confusion_json or "[]"),
+        "per_class": json.loads(score.per_class_json or "{}"),
+        "predictions_path": score.predictions_path,
+        "updated_at": now_iso(score.updated_at),
+    }
+
+
+def write_sync_index(db: Session) -> dict[str, Any]:
+    INDEX_ROOT.mkdir(parents=True, exist_ok=True)
+    cfg = load_config()
+    reveal_private = bool(cfg.get("reveal_private", False))
+    rows = db.scalars(select(Submission).join(User).order_by(Submission.created_at.desc())).all()
+    scores = db.scalars(select(Score)).all()
+    scores_by_submission: dict[int, list[Score]] = {}
+    for score in scores:
+        scores_by_submission.setdefault(score.submission_id, []).append(score)
+
+    submissions_payload = []
+    for row in rows:
+        item = submission_payload(row, reveal_private=reveal_private)
+        item["scores"] = [score_payload(score) for score in scores_by_submission.get(row.id, [])]
+        submissions_payload.append(item)
+
+    leaderboard_rows = leaderboard_rows_payload(db, reveal_private=reveal_private)
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "submissions": submissions_payload,
+        "leaderboard": leaderboard_rows,
+    }
+    (INDEX_ROOT / "submissions.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (INDEX_ROOT / "leaderboard.json").write_text(json.dumps({"rows": leaderboard_rows}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "path": str(INDEX_ROOT), "submissions": len(submissions_payload), "leaderboard": len(leaderboard_rows)}
 
 
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:
@@ -349,6 +410,7 @@ def ensure_schema() -> None:
 def startup() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     SUBMISSION_ROOT.mkdir(parents=True, exist_ok=True)
+    INDEX_ROOT.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
     ensure_schema()
     with SessionLocal() as db:
@@ -424,8 +486,11 @@ def logout(request: Request) -> dict[str, Any]:
 
 @app.get("/api/leaderboard")
 def leaderboard(db: Session = Depends(get_db)) -> dict[str, Any]:
-    cfg = load_config()
-    reveal_private = bool(cfg.get("reveal_private", False))
+    reveal_private = bool(load_config().get("reveal_private", False))
+    return {"rows": leaderboard_rows_payload(db, reveal_private=reveal_private)}
+
+
+def leaderboard_rows_payload(db: Session, reveal_private: bool = False) -> list[dict[str, Any]]:
     rows = db.scalars(
         select(Submission)
         .join(User)
@@ -440,13 +505,22 @@ def leaderboard(db: Session = Depends(get_db)) -> dict[str, Any]:
         if current is None or (row.public_score or 0) > (current.public_score or 0):
             best_by_user[row.user_id] = row
     ranked = sorted(best_by_user.values(), key=lambda item: item.public_score or 0, reverse=True)
-    return {"rows": [submission_payload(row, reveal_private=reveal_private) | {"rank": i + 1} for i, row in enumerate(ranked)]}
+    return [submission_payload(row, reveal_private=reveal_private) | {"rank": i + 1} for i, row in enumerate(ranked)]
 
 
 @app.get("/api/submissions/mine")
 def my_submissions(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(Submission).where(Submission.user_id == user.id).order_by(Submission.created_at.desc())).all()
     return {"rows": [submission_payload(row, reveal_private=True) for row in rows]}
+
+
+@app.get("/api/me/report/{submission_id}")
+def my_report(submission_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    submission = db.get(Submission, submission_id)
+    if not submission or (submission.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status_code=404, detail="提交记录不存在。")
+    rows = db.scalars(select(Score).where(Score.submission_id == submission_id).order_by(Score.split.asc())).all()
+    return {"submission": submission_payload(submission, reveal_private=True), "scores": [score_payload(row) for row in rows]}
 
 
 @app.get("/api/me/group")
@@ -548,6 +622,11 @@ def mark_final(submission_id: int, user: User = Depends(current_user), db: Sessi
 def admin_queue(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(Submission).join(User).order_by(Submission.created_at.desc()).limit(100)).all()
     return {"rows": [submission_payload(row, reveal_private=True) for row in rows]}
+
+
+@app.post("/api/admin/sync")
+def admin_sync(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    return write_sync_index(db)
 
 
 @app.get("/api/admin/students")

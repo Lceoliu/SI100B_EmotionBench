@@ -11,6 +11,7 @@ services:
     environment:
       APP_ENV: "${APP_ENV:-dev}"
       BENCH_ROOT: /workspace
+      HOST_BENCH_ROOT: /home/SI100B_26Fall/emotion-bench
       DATABASE_URL: "${DATABASE_URL:-sqlite:////workspace/storage/bench.db}"
       CONFIG_PATH: /workspace/config.yaml
     volumes:
@@ -31,6 +32,7 @@ services:
     profiles: ["worker"]
     environment:
       BENCH_ROOT: /workspace
+      HOST_BENCH_ROOT: /home/SI100B_26Fall/emotion-bench
       DATABASE_URL: "${DATABASE_URL:-sqlite:////workspace/storage/bench.db}"
       CONFIG_PATH: /workspace/config.yaml
       EVAL_IMAGE: "${EVAL_IMAGE:-emotion-bench-eval:dev}"

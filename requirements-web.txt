@@ -7,3 +7,4 @@ PyYAML==6.0.2
 safetensors==0.4.5
 passlib==1.7.4
 itsdangerous==2.2.0
+docker==7.1.0
