@@ -56,6 +56,16 @@ const lectureItems = [
   { title: '扩展主题', detail: '摄像头实时读取、YOLO 检测、数据增强等进阶方向。', resourceId: 'lab8' }
 ];
 
+const datasetExamples = [
+  { label: 'angry', zh: '愤怒', resourceId: 'example-angry' },
+  { label: 'disgust', zh: '厌恶', resourceId: 'example-disgust' },
+  { label: 'fear', zh: '恐惧', resourceId: 'example-fear' },
+  { label: 'happy', zh: '高兴', resourceId: 'example-happy' },
+  { label: 'neutral', zh: '中性', resourceId: 'example-neutral' },
+  { label: 'sad', zh: '悲伤', resourceId: 'example-sad' },
+  { label: 'surprise', zh: '惊讶', resourceId: 'example-surprise' }
+];
+
 let csrfToken = '';
 
 function setCsrfToken(token) {
@@ -262,6 +272,109 @@ function HomePage({ resources }) {
   );
 }
 
+function DatasetGuide({ resources }) {
+  const resourceMap = useMemo(() => {
+    const next = new Map();
+    resources.forEach((item) => next.set(item.id, item));
+    return next;
+  }, [resources]);
+  const studentKit = resourceMap.get('student-kit');
+  const projectRules = resourceMap.get('project-rules');
+
+  return (
+    <div className="home-stack">
+      <section className="window">
+        <header className="window-bar">
+          <span>数据集与评测规则</span>
+          <small>最终分数 = 隐藏评测集 Macro-F1</small>
+        </header>
+        <div className="guide-layout">
+          <div>
+            <h2>输入格式与类别顺序</h2>
+            <p>
+              平台会把每张图读取为 RGB，resize 到 <code>224×224</code>，再做 ImageNet mean/std 归一化。
+              即使训练集来自 FER2013 灰度图，提交模型也必须能接收 <code>[B, 3, 224, 224]</code> 的输入张量。
+            </p>
+            <div className="class-strip" aria-label="类别顺序">
+              {datasetExamples.map((item, index) => (
+                <span key={item.label}><strong>{index}</strong>{item.label}<small>{item.zh}</small></span>
+              ))}
+            </div>
+          </div>
+          <div className="rule-sheet guide-facts">
+            <dl>
+              <div><dt>公开小样本</dt><dd>70 张</dd></div>
+              <div><dt>最终隐藏集</dt><dd>约 1k 张</dd></div>
+              <div><dt>显示分数</dt><dd>Macro-F1 × 100</dd></div>
+              <div><dt>图像通道</dt><dd>RGB</dd></div>
+            </dl>
+          </div>
+        </div>
+      </section>
+
+      <section className="window">
+        <header className="window-bar">
+          <span>样例展示</span>
+          <small>来自公开小样本，仅用于理解格式</small>
+        </header>
+        <div className="example-grid">
+          {datasetExamples.map((item, index) => {
+            const resource = resourceMap.get(item.resourceId);
+            return (
+              <figure className="example-tile" key={item.label}>
+                {resource?.available ? (
+                  <img src={resource.download_url} alt={`${item.zh} / ${item.label} 样例`} loading="lazy" />
+                ) : (
+                  <div className="example-placeholder">{index}</div>
+                )}
+                <figcaption>
+                  <strong>{index}. {item.label}</strong>
+                  <span>{item.zh}</span>
+                </figcaption>
+              </figure>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="window">
+        <header className="window-bar">
+          <span>提交建议</span>
+          <small>让本地测试与服务器更接近</small>
+        </header>
+        <div className="guide-notes">
+          <div>
+            <strong>不要把 70 张小样本当作排行榜验证集</strong>
+            <p>它只用于检查读取、类别顺序和提交流程。最终排行榜只使用隐藏评测集，不公开标签和图片。</p>
+          </div>
+          <div>
+            <strong>注意灰度训练与 RGB 评测的差异</strong>
+            <p>如果你用 FER2013 训练，可以在训练时显式复制到三通道，或在模型前几层中处理 RGB 到灰度/特征的映射。</p>
+          </div>
+          <div>
+            <strong>合理使用数据增强和验证集</strong>
+            <p>轻微裁切、翻转、旋转、亮度/对比度扰动通常比只换大模型更稳定；请优先检查每类 F1，而不是只看 accuracy。</p>
+          </div>
+        </div>
+        <div className="guide-downloads">
+          {studentKit?.available && (
+            <a className="download-link" href={studentKit.download_url}>
+              <Download size={15} />
+              <span>下载学生工具包</span>
+            </a>
+          )}
+          {projectRules?.available && (
+            <a className="download-link" href={projectRules.download_url}>
+              <Download size={15} />
+              <span>下载项目评分规则</span>
+            </a>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AuthPanel({ user, onSession, onAfterLogin }) {
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ email: '', display_name: '', password: '', invite_code: '' });
@@ -423,7 +536,7 @@ function Leaderboard({ rows, admin, onDelete }) {
   );
 }
 
-function SubmitPanel({ user, config, onCreated }) {
+function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
   const [file, setFile] = useState(null);
   const [mode, setMode] = useState('public');
   const [message, setMessage] = useState('');
@@ -471,6 +584,10 @@ function SubmitPanel({ user, config, onCreated }) {
             <div>
               <strong>压缩包要求</strong>
               <p>ZIP 内必须包含 <code>model.py</code> 和 <code>model.safetensors</code>。第一次提交请先测试：测试会进入真实沙箱做兼容性检查，不计分、不占每日配额。</p>
+              <button type="button" className="inline-guide-link" onClick={onOpenGuide}>
+                <BookOpen size={15} />
+                查看数据集说明、样例与下载
+              </button>
             </div>
           </div>
           <label className="file-input">
@@ -950,6 +1067,7 @@ function App() {
     home: '人脸检测与表情分类项目',
     leaderboard: '最终排行榜',
     submit: '模型提交',
+    dataset: '数据集说明',
     runs: '我的评测记录',
     ops: 'TA 管理台'
   }[active];
@@ -958,6 +1076,7 @@ function App() {
     home: 'SI100B Spring 2026 课程项目评测平台，欢迎提交模型并查看排行榜！',
     leaderboard: '排行榜分数即最终平台评测分数，按隐藏评测集 Macro-F1 百分制展示。',
     submit: '上传包含 model.py 与 model.safetensors 的 ZIP 文件',
+    dataset: '了解公开小样本、隐藏评测集、RGB 输入格式和评分口径。',
     runs: '查看自己的提交状态、最终分数。',
     ops: 'TA 可查看评测队列、注册学生，并统一维护学生分组。'
   }[active];
@@ -995,7 +1114,8 @@ function App() {
           {notice && <div className="notice">{notice}</div>}
           {active === 'home' && <HomePage resources={resources} />}
           {active === 'leaderboard' && <Leaderboard rows={leaderboard} admin={user?.role === 'admin'} onDelete={deleteSubmission} />}
-          {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} />}
+          {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} onOpenGuide={() => setActive('dataset')} />}
+          {active === 'dataset' && <DatasetGuide resources={resources} />}
           {active === 'runs' && <MyRuns rows={mine} onRefresh={() => loadMine(user)} onFinal={markFinal} />}
           {active === 'ops' && user?.role === 'admin' && (
             <OpsPanel

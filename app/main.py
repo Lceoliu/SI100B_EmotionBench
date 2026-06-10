@@ -54,6 +54,13 @@ RESOURCE_MANIFEST = [
     {"id": "lab7", "title": "Lab 7：数据标注的重要性", "filename": "lab7.pdf"},
     {"id": "lab8", "title": "Lab 8：扩展主题", "filename": "lab8.pdf"},
     {"id": "project-rules", "title": "项目评分完整规则", "filename": "face-emotion-project-rules.pdf"},
+    {"id": "example-angry", "title": "公开样例：angry", "filename": "examples/angry.jpg", "media_type": "image/jpeg"},
+    {"id": "example-disgust", "title": "公开样例：disgust", "filename": "examples/disgust.jpg", "media_type": "image/jpeg"},
+    {"id": "example-fear", "title": "公开样例：fear", "filename": "examples/fear.jpg", "media_type": "image/jpeg"},
+    {"id": "example-happy", "title": "公开样例：happy", "filename": "examples/happy.jpg", "media_type": "image/jpeg"},
+    {"id": "example-neutral", "title": "公开样例：neutral", "filename": "examples/neutral.jpg", "media_type": "image/jpeg"},
+    {"id": "example-sad", "title": "公开样例：sad", "filename": "examples/sad.jpg", "media_type": "image/jpeg"},
+    {"id": "example-surprise", "title": "公开样例：surprise", "filename": "examples/surprise.jpg", "media_type": "image/jpeg"},
 ]
 
 
