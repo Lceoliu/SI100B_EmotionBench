@@ -200,6 +200,9 @@ h1 {
 
 .bar-action,
 .link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--line);
   background: #fff;
   color: var(--cobalt);

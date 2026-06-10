@@ -83,7 +83,7 @@ def node_line(node: ast.AST) -> str:
 
 def check_model_source() -> None:
     if not MODEL_FILE.exists():
-        raise BenchError("找不到 model/__init__.py。请确认你在工具包根目录运行。")
+        raise BenchError("找不到 model/__init__.py。请确认你在代码框架根目录运行。")
     source = MODEL_FILE.read_text(encoding="utf-8")
     try:
         tree = ast.parse(source)
@@ -203,8 +203,8 @@ def list_devset_images() -> list[Path]:
 def command_score(args) -> dict | None:
     headline()
     if not DEVSET_LABELS.exists() or not list_devset_images():
-        warn("当前工具包没有 devset 图片或 labels.csv，暂时不能本地评分。")
-        print("   → 这不影响 check/pack。等待 TA 发布包含 devset 的新版工具包后再运行 score。")
+        warn("当前代码框架没有 devset 图片或 labels.csv，暂时不能本地评分。")
+        print("   → 这不影响 check/pack。等待 TA 发布包含 devset 的新版代码框架后再运行 score。")
         return None
     check_model_source()
     model = load_weights(build_model(), Path(args.weights))
@@ -223,7 +223,7 @@ def command_score(args) -> dict | None:
             y_true.append(int(label))
             y_pred.append(pred)
     if not y_true:
-        raise BenchError("devset 图片和 labels.csv 没有匹配项。请联系 TA 更新工具包。")
+        raise BenchError("devset 图片和 labels.csv 没有匹配项。请联系 TA 更新代码框架。")
     macro_f1, accuracy, confusion, per_class = compute_macro_f1(y_true, y_pred, NUM_CLASSES)
     write_confusion_png(ROOT / "local_confusion.png", confusion)
     payload = {"macro_f1": macro_f1, "accuracy": accuracy, "matched": len(y_true), "confusion": confusion, "per_class": per_class}

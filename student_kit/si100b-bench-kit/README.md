@@ -1,4 +1,4 @@
-# SI100B Emotional Bench 学生工具包
+# SI100B Emotional Bench 代码框架
 
 你只允许修改 `model/` 目录。其他文件都是评测工具，不要动。
 
@@ -52,9 +52,9 @@ python bench.py pack --weights 你的权重.pth
 
 ## 本地评分说明
 
-`score` 会使用 `bench/devset/` 中约 70 张公开小样本。如果你下载的版本暂时没有 devset 图片，`score` 会告诉你等待 TA 发布新版工具包；这不影响 `check` 和 `pack`。
+`score` 会使用 `bench/devset/` 中约 70 张公开小样本。如果你下载的版本暂时没有 devset 图片，`score` 会告诉你等待 TA 发布新版代码框架；这不影响 `check` 和 `pack`。
 
-本地分数只供参考，不计入成绩。排行榜分数即最终平台评测分数，使用约 1k 张隐藏评测图像上的 Macro-F1，并以百分制显示。隐藏集包含真实 RGB 裁脸图像和少量轻微增强样本。
+本地分数只供参考，不计入成绩。排行榜分数即最终平台评测分数，使用约 1k 张排行榜评测图像上的 Macro-F1，并以百分制显示。排行榜评测集包含真实 RGB 裁脸图像和少量轻微增强样本。
 
 ## 常见错误
 
