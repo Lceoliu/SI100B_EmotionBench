@@ -95,7 +95,7 @@ async function api(path, options = {}) {
 
 function fmtScore(value) {
   if (value === null || value === undefined) return '—';
-  return Number(value).toFixed(4);
+  return `${(Number(value) * 100).toFixed(1)}`;
 }
 
 function fmtParams(value) {
@@ -179,7 +179,7 @@ function HomePage({ resources }) {
           <div>
             <h2>从人脸检测到表情识别</h2>
             <p>
-              本项目为 SI100B 课程Project 人脸检测与表情分类 的评测平台。用户可以提交模型并查看公开榜结果。
+              本项目为 SI100B 课程Project 人脸检测与表情分类的评测平台。用户可以提交模型并查看最终排行榜结果。
             </p>
           </div>
           <ol className="process-list">
@@ -247,7 +247,7 @@ function HomePage({ resources }) {
           </div> */}
           <div className="resource-note">
             <strong>项目评分</strong>
-            <p>课程project评分包含参与与 checkpoint、bonus，以及最终提交的文字报告。平台评测只负责模型提交、公开榜和最终提交记录。完整规则请查看
+            <p>课程project评分包含参与与 checkpoint、bonus，以及最终提交的文字报告。平台评测只负责模型提交、最终排行榜和最终提交记录。完整规则请查看
               {' '}
               {projectRules?.available ? (
                 <a href={projectRules.download_url}>此处的文件下载链接</a>
@@ -395,7 +395,7 @@ function Leaderboard({ rows, admin, onDelete }) {
     { key: 'rank', label: '#', render: (row) => <strong>{row.rank}</strong> },
     { key: 'display_name', label: '队伍/姓名' },
     { key: 'group_name', label: '小组', render: (row) => row.group_name || '—' },
-    { key: 'public_score', label: '公开分数', render: (row) => <strong>{fmtScore(row.public_score)}</strong> },
+    { key: 'public_score', label: '最终分数', render: (row) => <strong>{fmtScore(row.public_score)}</strong> },
     { key: 'params', label: '参数量', render: (row) => fmtParams(row.param_count) },
     { key: 'weight', label: '权重大小', render: (row) => `${row.weight_mb} MB` },
     { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
@@ -415,10 +415,10 @@ function Leaderboard({ rows, admin, onDelete }) {
   return (
     <section className="window">
       <header className="window-bar">
-        <span>公开榜</span>
-        <small>每位学生/队伍取最高有效提交</small>
+        <span>最终排行榜</span>
+        <small>按隐藏评测集 Macro-F1 排序，显示为百分制</small>
       </header>
-      <DataTable columns={columns} rows={rows} empty="暂时还没有通过公开集评测的提交。" />
+      <DataTable columns={columns} rows={rows} empty="暂时还没有通过最终评测的提交。" />
     </section>
   );
 }
@@ -512,7 +512,7 @@ function MyRuns({ rows, onRefresh, onFinal }) {
     { key: 'filename', label: '文件' },
     { key: 'mode', label: '模式', render: (row) => modeLabels[row.mode] || row.mode || '正式提交' },
     { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
-    { key: 'public_score', label: '公开分数', render: (row) => fmtScore(row.public_score) },
+    { key: 'public_score', label: '最终分数', render: (row) => fmtScore(row.public_score) },
     { key: 'param_count', label: '参数量', render: (row) => fmtParams(row.param_count) },
     { key: 'created_at', label: '创建时间', render: (row) => fmtTime(row.created_at) },
     {
@@ -739,7 +739,7 @@ function OpsPanel({ queueRows, students, invites, config, onSaveGroup, onToggleD
         <div className="ops-strip">
           <span><Database size={15} /> SQLite 数据库</span>
           <span><ShieldCheck size={15} /> Docker 评测镜像</span>
-          <span><Activity size={15} /> 私榜公开：{config.reveal_private ? '已开启' : '未开启'}</span>
+          <span><Activity size={15} /> 最终评测：隐藏数据集</span>
         </div>
         <DataTable columns={columns} rows={queueRows} empty="暂无评测队列记录。" />
       </section>
@@ -948,7 +948,7 @@ function App() {
 
   const pageTitle = {
     home: '人脸检测与表情分类项目',
-    leaderboard: '公开排行榜',
+    leaderboard: '最终排行榜',
     submit: '模型提交',
     runs: '我的评测记录',
     ops: 'TA 管理台'
@@ -956,9 +956,9 @@ function App() {
 
   const pageCopy = {
     home: 'SI100B Spring 2026 课程项目评测平台，欢迎提交模型并查看排行榜！',
-    leaderboard: '公开排行榜每日更新，展示每位学生/队伍的最高有效提交结果。',
+    leaderboard: '排行榜分数即最终平台评测分数，按隐藏评测集 Macro-F1 百分制展示。',
     submit: '上传包含 model.py 与 model.safetensors 的 ZIP 文件',
-    runs: '查看自己的提交状态、公开分数。',
+    runs: '查看自己的提交状态、最终分数。',
     ops: 'TA 可查看评测队列、注册学生，并统一维护学生分组。'
   }[active];
 

@@ -105,12 +105,13 @@ def available_splits(mode: str) -> list[tuple[str, Path, Path | None]]:
             return [("dryrun", images_dir, labels_path if labels_path.exists() else None)]
         raise RuntimeError("测试样例数据未配置：需要 data/dryrun/images 下至少一张样例图片。请联系 TA。")
     splits = []
-    for split in ("public", "private", "realworld"):
+    for split in ("final", "public"):
         split_dir = DATA_ROOT / split
         images_dir = split_dir / "images"
         labels_path = split_dir / "labels.csv"
         if images_dir.exists() and labels_path.exists():
             splits.append((split, images_dir, labels_path))
+            break
     return splits
 
 
@@ -229,17 +230,11 @@ def evaluate_submission(submission_id: int) -> None:
             db.commit()
             write_sync_index(db)
             return
-        public = split_metrics.get("public")
-        private = split_metrics.get("private")
-        realworld = split_metrics.get("realworld")
-        if public:
-            submission.public_score = float(public["macro_f1"])
-        if private:
-            submission.private_score = float(private["macro_f1"])
-        if realworld:
-            submission.realworld_score = float(realworld["macro_f1"])
+        final = split_metrics.get("final") or split_metrics.get("public")
+        if final:
+            submission.public_score = float(final["macro_f1"])
         submission.status = "passed"
-        submission.message = "Evaluation finished."
+        submission.message = "Final evaluation finished."
         db.commit()
         write_sync_index(db)
 

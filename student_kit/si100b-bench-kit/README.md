@@ -50,9 +50,9 @@ python bench.py pack --weights 你的权重.pth
 
 ## 本地评分说明
 
-`score` 会使用 `bench/devset/` 中的公开样例数据。如果你下载的版本暂时没有 devset 图片，`score` 会告诉你等待 TA 发布新版工具包；这不影响 `check` 和 `pack`。
+`score` 会使用 `bench/devset/` 中约 70 张公开小样本。如果你下载的版本暂时没有 devset 图片，`score` 会告诉你等待 TA 发布新版工具包；这不影响 `check` 和 `pack`。
 
-本地分数只供参考，不计入成绩。正式成绩以网站 public/private/realworld 评测为准。
+本地分数只供参考，不计入成绩。排行榜分数即最终平台评测分数，使用隐藏评测集上的 Macro-F1，并以百分制显示。
 
 ## 常见错误
 
