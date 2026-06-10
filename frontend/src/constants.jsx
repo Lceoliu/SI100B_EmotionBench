@@ -50,6 +50,7 @@ export const pageTitles = {
   leaderboard: '最终排行榜',
   submit: '模型提交',
   dataset: '数据集说明',
+  submissionDetail: '提交详情',
   runs: '我的评测记录',
   ops: 'TA 管理台'
 };
@@ -59,6 +60,7 @@ export const pageCopy = {
   leaderboard: '排行榜分数即最终平台评测分数，按排行榜评测集 Macro-F1 百分制展示。',
   submit: '上传包含 model.py 与 model.safetensors 的 ZIP 文件',
   dataset: '了解公开小样本、排行榜评测集、RGB 输入格式和评分口径。',
+  submissionDetail: '查看单次提交的队列状态、指标与可视化结果。',
   runs: '查看自己的提交状态、最终分数。',
   ops: 'TA 可查看评测队列、注册学生，并统一维护学生分组。'
 };

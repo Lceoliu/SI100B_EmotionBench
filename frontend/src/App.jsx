@@ -10,6 +10,7 @@ import {
   Leaderboard,
   MyRuns,
   OpsPanel,
+  SubmissionDetail,
   SubmitPanel
 } from './pages.jsx';
 
@@ -25,6 +26,7 @@ function App() {
   const [group, setGroup] = useState({ group_name: '', mates: [] });
   const [config, setConfig] = useState({});
   const [notice, setNotice] = useState('');
+  const [selectedSubmissionId, setSelectedSubmissionId] = useState(null);
 
   const tabs = useMemo(() => (user?.role === 'admin' ? [...baseTabs, adminTab] : baseTabs), [user]);
 
@@ -245,7 +247,26 @@ function App() {
           {active === 'leaderboard' && <Leaderboard rows={leaderboard} admin={user?.role === 'admin'} onDelete={deleteSubmission} />}
           {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} onOpenGuide={() => setActive('dataset')} />}
           {active === 'dataset' && <DatasetGuide resources={resources} onBack={() => setActive('submit')} />}
-          {active === 'runs' && <MyRuns rows={mine} onRefresh={() => loadMine(user)} onFinal={markFinal} />}
+          {active === 'runs' && (
+            <MyRuns
+              rows={mine}
+              onRefresh={() => loadMine(user)}
+              onFinal={markFinal}
+              onOpenDetail={(id) => {
+                setSelectedSubmissionId(id);
+                setActive('submissionDetail');
+              }}
+            />
+          )}
+          {active === 'submissionDetail' && (
+            <SubmissionDetail
+              submissionId={selectedSubmissionId}
+              onBack={() => {
+                setActive('runs');
+                loadMine(user).catch(() => {});
+              }}
+            />
+          )}
           {active === 'ops' && user?.role === 'admin' && (
             <OpsPanel
               queueRows={queue}

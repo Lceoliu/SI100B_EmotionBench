@@ -15,7 +15,10 @@ from docker.types import DeviceRequest
 from sqlalchemy import select
 
 from app.main import Base, Score, SessionLocal, Submission, engine, validate_model_py, write_sync_index
-from worker.scoring import score_predictions
+from worker.scoring import score_predictions, write_confusion_matrix_png
+
+
+CLASS_NAMES = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 
 
 ROOT = Path(os.environ.get("BENCH_ROOT", "/workspace")).resolve()
@@ -216,6 +219,7 @@ def evaluate_submission(submission_id: int) -> None:
         if labels_path is not None:
             metrics = score_predictions(labels_path, predictions_path, num_classes)
             (out_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+            write_confusion_matrix_png(metrics["confusion"], out_dir / "confusion.png", CLASS_NAMES[:num_classes])
             split_metrics[split] = metrics
 
             with SessionLocal() as db:

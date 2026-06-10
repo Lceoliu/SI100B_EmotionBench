@@ -30,6 +30,7 @@ STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", ROOT / "storage")).resolve()
 SUBMISSION_ROOT = STORAGE_ROOT / "submissions"
 INDEX_ROOT = STORAGE_ROOT / "index"
 RESOURCE_ROOT = STORAGE_ROOT / "resources"
+RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", ROOT / "results")).resolve()
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", ROOT / "frontend" / "dist")).resolve()
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{STORAGE_ROOT / 'bench.db'}")
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-emotion-bench-change-me")
@@ -284,6 +285,7 @@ def submission_payload(submission: Submission, reveal_private: bool = False) -> 
 
 
 def score_payload(score: Score) -> dict[str, Any]:
+    confusion_path = RESULTS_ROOT / f"submission-{score.submission_id}" / score.split / "confusion.png"
     return {
         "split": score.split,
         "macro_f1": score.macro_f1,
@@ -292,6 +294,7 @@ def score_payload(score: Score) -> dict[str, Any]:
         "ci_high": score.ci_high,
         "confusion": json.loads(score.confusion_json or "[]"),
         "per_class": json.loads(score.per_class_json or "{}"),
+        "confusion_url": f"/api/me/report/{score.submission_id}/confusion/{score.split}" if confusion_path.is_file() else None,
         "predictions_path": score.predictions_path,
         "updated_at": now_iso(score.updated_at),
     }
@@ -703,6 +706,19 @@ def my_report(submission_id: int, user: User = Depends(current_user), db: Sessio
         raise HTTPException(status_code=404, detail="提交记录不存在。")
     rows = db.scalars(select(Score).where(Score.submission_id == submission_id).order_by(Score.split.asc())).all()
     return {"submission": submission_payload(submission, reveal_private=True), "scores": [score_payload(row) for row in rows]}
+
+
+@app.get("/api/me/report/{submission_id}/confusion/{split}")
+def my_confusion_matrix(submission_id: int, split: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> FileResponse:
+    submission = db.get(Submission, submission_id)
+    if not submission or (submission.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status_code=404, detail="提交记录不存在。")
+    if not db.scalar(select(Score).where(Score.submission_id == submission_id, Score.split == split)):
+        raise HTTPException(status_code=404, detail="评测结果不存在。")
+    path = (RESULTS_ROOT / f"submission-{submission_id}" / split / "confusion.png").resolve()
+    if not path.is_file() or RESULTS_ROOT not in path.parents:
+        raise HTTPException(status_code=404, detail="混淆矩阵尚未生成。")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=60"})
 
 
 @app.get("/api/me/group")

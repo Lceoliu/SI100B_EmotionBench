@@ -12,6 +12,7 @@ import {
   LogIn,
   LogOut,
   Plus,
+  RotateCw,
   ShieldCheck,
   Trash2,
   UploadCloud
@@ -176,7 +177,7 @@ export function DatasetGuide({ resources, onBack }) {
             return (
               <figure className="example-tile" key={item.label}>
                 {resource?.available ? (
-                  <img src={resource.download_url} alt={`${item.zh} / ${item.label} 样例`} loading="lazy" />
+                  <img src={`${resource.download_url}?v=${resource.size || 0}`} alt={`${item.zh} / ${item.label} 样例`} loading="lazy" />
                 ) : (
                   <div className="example-placeholder">{index}</div>
                 )}
@@ -485,7 +486,7 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
   );
 }
 
-export function MyRuns({ rows, onRefresh, onFinal }) {
+export function MyRuns({ rows, onRefresh, onFinal, onOpenDetail }) {
   const columns = [
     { key: 'id', label: 'ID' },
     { key: 'filename', label: '文件' },
@@ -494,6 +495,15 @@ export function MyRuns({ rows, onRefresh, onFinal }) {
     { key: 'public_score', label: '最终分数', render: (row) => fmtScore(row.public_score) },
     { key: 'param_count', label: '参数量', render: (row) => fmtParams(row.param_count) },
     { key: 'created_at', label: '创建时间', render: (row) => fmtTime(row.created_at) },
+    {
+      key: 'detail',
+      label: '详情',
+      render: (row) => (
+        <button className="link-button" onClick={() => onOpenDetail(row.id)}>
+          查看详情
+        </button>
+      )
+    },
     {
       key: 'final',
       label: '最终提交',
@@ -515,6 +525,139 @@ export function MyRuns({ rows, onRefresh, onFinal }) {
       </header>
       <DataTable columns={columns} rows={rows} empty="登录并上传模型包后，这里会显示你的提交记录。" />
     </section>
+  );
+}
+
+function averageMetric(score, key) {
+  const values = Object.values(score?.per_class || {})
+    .map((item) => Number(item?.[key]))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function metricText(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+  return `${(Number(value) * 100).toFixed(1)}`;
+}
+
+function pickPrimaryScore(scores) {
+  return scores.find((score) => score.split === 'final') || scores.find((score) => score.split === 'public') || scores[0] || null;
+}
+
+export function SubmissionDetail({ submissionId, onBack }) {
+  const [report, setReport] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function loadReport() {
+    if (!submissionId) return;
+    setBusy(true);
+    setError('');
+    try {
+      const payload = await api(`/api/me/report/${submissionId}`);
+      setReport(payload);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    loadReport();
+  }, [submissionId]);
+
+  const submission = report?.submission;
+  const score = pickPrimaryScore(report?.scores || []);
+  const meanRecall = averageMetric(score, 'recall');
+  const meanPrecision = averageMetric(score, 'precision');
+  const perClass = Object.entries(score?.per_class || {});
+  const running = ['queued', 'running'].includes(submission?.status);
+
+  return (
+    <div className="home-stack">
+      <section className="window">
+        <header className="window-bar">
+          <span>提交 #{submissionId}</span>
+          <div className="inline-actions">
+            <button className="bar-action" onClick={loadReport} disabled={busy}>
+              <RotateCw size={14} /> 刷新
+            </button>
+            <button className="bar-action" onClick={onBack}>
+              <ArrowLeft size={14} /> 返回我的记录
+            </button>
+          </div>
+        </header>
+        {error && <p className="form-error">{error}</p>}
+        <div className="detail-summary">
+          <div className="detail-status">
+            <StatusChip status={submission?.status || 'queued'} />
+            <strong>{running ? '评测进行中' : submission?.status === 'passed' || submission?.status === 'final' ? '评测已完成' : '等待结果'}</strong>
+            <p>{submission?.message || '正在同步提交状态。'}</p>
+          </div>
+          <div className="detail-score">
+            <strong>{metricText(score?.macro_f1)}</strong>
+            <span>总分 / Macro-F1</span>
+            <small>
+              Accuracy {metricText(score?.accuracy)} · Recall {metricText(meanRecall)} · Precision {metricText(meanPrecision)}
+            </small>
+          </div>
+        </div>
+      </section>
+
+      <section className="window">
+        <header className="window-bar">
+          <span>指标详情</span>
+          <small>{score ? `${score.split} split` : '评测完成后显示'}</small>
+        </header>
+        {score ? (
+          <div className="metric-grid">
+            <div><dt>Macro-F1</dt><dd>{metricText(score.macro_f1)}</dd></div>
+            <div><dt>Accuracy</dt><dd>{metricText(score.accuracy)}</dd></div>
+            <div><dt>平均 Recall</dt><dd>{metricText(meanRecall)}</dd></div>
+            <div><dt>置信区间</dt><dd>{metricText(score.ci_low)} - {metricText(score.ci_high)}</dd></div>
+          </div>
+        ) : (
+          <p className="empty-cell">评测完成后，这里会显示总分、accuracy、recall 和置信区间。</p>
+        )}
+      </section>
+
+      {score && (
+        <section className="window">
+          <header className="window-bar">
+            <span>逐类 F1</span>
+            <small>用于定位类别短板</small>
+          </header>
+          <div className="class-bars">
+            {perClass.map(([label, item]) => {
+              const value = Number(item.f1 || 0);
+              return (
+                <div className="class-bar" key={label}>
+                  <span>{label}</span>
+                  <div><i style={{ width: `${Math.max(2, value * 100)}%` }} /></div>
+                  <strong>{metricText(value)}</strong>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <section className="window">
+        <header className="window-bar">
+          <span>混淆矩阵</span>
+          <small>评测彻底完成后生成</small>
+        </header>
+        {score?.confusion_url ? (
+          <div className="confusion-panel">
+            <img src={`${score.confusion_url}?v=${encodeURIComponent(score.updated_at || '')}`} alt="混淆矩阵" />
+          </div>
+        ) : (
+          <p className="empty-cell">暂无混淆矩阵图片。排队、运行中或历史提交未生成图片时会显示此提示。</p>
+        )}
+      </section>
+    </div>
   );
 }
 

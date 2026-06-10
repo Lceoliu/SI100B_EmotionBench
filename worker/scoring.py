@@ -153,3 +153,37 @@ def score_predictions(labels_path: Path, predictions_path: Path, num_classes: in
     metrics["missing"] = missing[:50]
     metrics["missing_count"] = len(missing)
     return metrics
+
+
+def write_confusion_matrix_png(confusion: list[list[int]], output_path: Path, class_names: list[str] | None = None) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    labels = class_names or [str(index) for index in range(len(confusion))]
+    matrix = np.array(confusion, dtype=float)
+    row_sums = matrix.sum(axis=1, keepdims=True)
+    normalized = np.divide(matrix, row_sums, out=np.zeros_like(matrix), where=row_sums != 0)
+
+    fig, ax = plt.subplots(figsize=(7.2, 6.2), dpi=160)
+    image = ax.imshow(normalized, cmap="Blues", vmin=0, vmax=max(0.01, float(normalized.max())))
+    ax.set_xticks(range(len(labels)), labels=labels, rotation=35, ha="right")
+    ax.set_yticks(range(len(labels)), labels=labels)
+    ax.set_xlabel("Predicted label")
+    ax.set_ylabel("True label")
+    ax.set_title("Confusion Matrix")
+
+    for row in range(matrix.shape[0]):
+        for col in range(matrix.shape[1]):
+            value = int(matrix[row, col])
+            ratio = normalized[row, col]
+            color = "white" if ratio > 0.45 else "#202020"
+            ax.text(col, row, f"{value}\n{ratio:.0%}", ha="center", va="center", color=color, fontsize=8)
+
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
