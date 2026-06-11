@@ -20,6 +20,7 @@ CLASS_NAMES = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"
 
 
 def choose_device(name: str) -> torch.device:
+    # auto 会优先用 NVIDIA GPU，其次 Apple Silicon MPS，最后才是 CPU。
     if name != "auto":
         return torch.device(name)
     if torch.cuda.is_available():
@@ -30,6 +31,8 @@ def choose_device(name: str) -> torch.device:
 
 
 def image_transform(split: str, input_size: int, channels: int):
+    # 这里的 resize / normalize 要尽量和服务器评测保持一致。
+    # 训练集只额外加了一个水平翻转增强，验证集不做随机增强。
     if channels == 1:
         color = transforms.Grayscale(num_output_channels=1)
         mean, std = GRAY_MEAN, GRAY_STD
@@ -47,6 +50,7 @@ def image_transform(split: str, input_size: int, channels: int):
 
 
 def load_fer2013(data_root: Path, input_size: int, channels: int, batch_size: int, num_workers: int):
+    # FER2013 解压后应包含 train/ 和 test/ 两个目录，每个目录下有 7 个类别文件夹。
     train_dir = data_root / "train"
     val_dir = data_root / "test"
     if not train_dir.is_dir() or not val_dir.is_dir():
@@ -65,6 +69,8 @@ def load_fer2013(data_root: Path, input_size: int, channels: int, batch_size: in
 
 
 def import_student_model() -> torch.nn.Module:
+    # 默认训练路线：直接使用 model/__init__.py 里的 build_model()。
+    # 这样训练出来的权重最容易被 bench.py pack 正确加载。
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     importlib.invalidate_caches()
@@ -74,6 +80,8 @@ def import_student_model() -> torch.nn.Module:
 
 
 def adapt_resnet_first_conv(model: nn.Module, channels: int) -> None:
+    # torchvision 的 ResNet 默认吃 3 通道图片。
+    # 如果你选择灰度 C=1，这里把第一层卷积改成 1 通道。
     if channels == 3:
         return
     old = model.conv1
@@ -98,6 +106,7 @@ def build_model(args) -> torch.nn.Module:
     elif args.arch == "resnet18":
         from torchvision.models import ResNet18_Weights, resnet18
 
+        # 训练时可以下载 ImageNet 预训练权重；提交/导出模板里仍然要写 weights=None。
         weights = ResNet18_Weights.DEFAULT if args.imagenet else None
         model = resnet18(weights=weights)
         adapt_resnet_first_conv(model, args.channels)
@@ -106,6 +115,7 @@ def build_model(args) -> torch.nn.Module:
         raise SystemExit(f"unknown arch: {args.arch}")
 
     with torch.inference_mode():
+        # 在真正训练前先跑一遍假输入，提前发现输入通道或输出类别数错误。
         y = model(torch.randn(2, args.channels, args.input_size, args.input_size))
     if tuple(y.shape) != (2, NUM_CLASSES):
         raise SystemExit(f"模型输出形状应为 (B, 7)，当前为 {tuple(y.shape)}")
@@ -178,6 +188,7 @@ def main() -> None:
             f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
         )
         if val_acc > best_acc:
+            # 只保存验证集 accuracy 最好的那一次权重，导出 ONNX 时用它。
             best_acc = val_acc
             torch.save(model.state_dict(), out_path)
             print(f"saved: {out_path} (best val_acc={best_acc:.4f})")

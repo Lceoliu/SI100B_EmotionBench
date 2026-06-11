@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KIT_ROOT = ROOT / "student_kit" / "si100b-bench-kit"
 OUT_DIR = ROOT / "storage" / "resources"
-OUT_ZIP = OUT_DIR / "si100b-bench-kit-v0.2.1.zip"
+OUT_ZIP = OUT_DIR / "si100b-bench-kit-v0.2.2.zip"
 SKIP_DIRS = {"__pycache__", ".venv", "venv", "env", "checkpoints", "demo_outputs", "datasets"}
 SKIP_FILES = {"model.onnx", "local_metrics.json", "local_confusion.png"}
 

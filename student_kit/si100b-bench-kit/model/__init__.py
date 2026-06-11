@@ -20,6 +20,7 @@ NUM_CLASSES = 7
 class SimpleCNN(nn.Module):
     def __init__(self, in_channels: int = 3, channels: int = 32, dropout: float = 0.1):
         super().__init__()
+        # features 负责从图片里提取特征，最后用 AdaptiveAvgPool2d 压成一个向量。
         self.features = nn.Sequential(
             nn.Conv2d(in_channels, channels, 3, stride=2, padding=1),
             nn.BatchNorm2d(channels),
@@ -33,6 +34,7 @@ class SimpleCNN(nn.Module):
             nn.AdaptiveAvgPool2d(1),
         )
         self.classifier = nn.Sequential(
+            # classifier 负责把特征变成 7 个类别的 logits。
             nn.Dropout(dropout),
             nn.Linear(channels * 4, NUM_CLASSES),
         )
@@ -44,6 +46,8 @@ class SimpleCNN(nn.Module):
 
 
 def build_model() -> nn.Module:
+    # 默认使用 RGB 输入，所以 in_channels=3。
+    # 如果你训练和提交都选择灰度 C=1，这里也要改成 in_channels=1。
     return SimpleCNN(in_channels=3)
 
 
