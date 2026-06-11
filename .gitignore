@@ -32,3 +32,7 @@ __pycache__/
 # Web-downloadable course resources are stored on the server, not versioned here
 storage/resources/
 storage/index/
+
+# Local deployment secrets
+.env
+.env.*
