@@ -28,3 +28,7 @@ __pycache__/
 # Logs/temp
 *.log
 .DS_Store
+
+# Web-downloadable course resources are stored on the server, not versioned here
+storage/resources/
+storage/index/
