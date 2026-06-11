@@ -1,97 +1,105 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 from pathlib import Path
 
-import torch
-from PIL import Image
-from safetensors.torch import load_file
-from torchvision import transforms
+import numpy as np
+import onnxruntime as ort
+
+from transforms import IMAGE_SUFFIXES, cache_name, preprocess_image
 
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-
-
-def find_one(root: Path, name: str) -> Path:
-    matches = list(root.rglob(name))
+def find_model(sub_dir: Path) -> Path:
+    matches = sorted(sub_dir.rglob("*.onnx"))
     if len(matches) != 1:
-        raise RuntimeError(f"expected exactly one {name}, found {len(matches)}")
+        raise RuntimeError(f"expected exactly one .onnx file, found {len(matches)}")
     return matches[0]
 
 
-def load_student_model(sub_dir: Path, device: torch.device) -> torch.nn.Module:
-    model_py = find_one(sub_dir, "model.py")
-    weights = find_one(sub_dir, "model.safetensors")
-    spec = importlib.util.spec_from_file_location("student_model", model_py)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("cannot import model.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    if not hasattr(module, "build_model"):
-        raise RuntimeError("model.py must expose build_model()")
-    model = module.build_model()
-    if not isinstance(model, torch.nn.Module):
-        raise RuntimeError("build_model() must return torch.nn.Module")
-    state = load_file(str(weights), device=str(device))
-    model.load_state_dict(state, strict=True)
-    model.to(device)
-    model.eval()
-    return model
+def load_cache(data_dir: Path) -> list[tuple[str, Path]]:
+    manifest_path = data_dir / "cache_manifest.json"
+    if not manifest_path.exists():
+        return []
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    items = []
+    for item in manifest.get("items", []):
+        items.append((str(item["filename"]), data_dir / str(item["array"])))
+    if not items:
+        raise RuntimeError(f"cache manifest has no items: {manifest_path}")
+    return items
 
 
-def list_images(data_dir: Path) -> list[Path]:
+def list_images(data_dir: Path) -> list[tuple[str, Path]]:
     images = sorted(path for path in data_dir.rglob("*") if path.suffix.lower() in IMAGE_SUFFIXES and path.is_file())
     if not images:
-        raise RuntimeError("no images found under /data")
-    return images
+        raise RuntimeError("no images or cache arrays found under /data")
+    return [(path.relative_to(data_dir).as_posix(), path) for path in images]
 
 
-def build_transform() -> transforms.Compose:
-    input_size = int(os.environ.get("INPUT_SIZE", "224"))
-    mean = json.loads(os.environ.get("NORMALIZE_MEAN", "[0.485, 0.456, 0.406]"))
-    std = json.loads(os.environ.get("NORMALIZE_STD", "[0.229, 0.224, 0.225]"))
-    return transforms.Compose(
-        [
-            transforms.Resize((input_size, input_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std),
-        ]
-    )
+def input_shape(session: ort.InferenceSession) -> tuple[str, int, int]:
+    inputs = session.get_inputs()
+    if len(inputs) != 1:
+        raise RuntimeError("ONNX model must have exactly one input")
+    shape = inputs[0].shape
+    if len(shape) != 4:
+        raise RuntimeError("ONNX input must be NCHW [B, C, H, W]")
+    channels, height, width = shape[1], shape[2], shape[3]
+    if channels not in (1, 3) or height != width or height not in (48, 64, 96, 112, 160, 224):
+        raise RuntimeError(f"unsupported ONNX input shape: {shape}")
+    return inputs[0].name, int(channels), int(height)
 
 
-def read_batch(paths: list[Path], data_dir: Path, transform) -> tuple[torch.Tensor, list[str]]:
-    tensors = []
+def output_name(session: ort.InferenceSession) -> str | None:
+    outputs = session.get_outputs()
+    return outputs[0].name if outputs else None
+
+
+def read_batch(
+    items: list[tuple[str, Path]],
+    *,
+    channels: int,
+    input_size: int,
+    from_cache: bool,
+) -> tuple[np.ndarray, list[str]]:
+    arrays = []
     keys = []
-    for path in paths:
-        with Image.open(path) as img:
-            tensors.append(transform(img.convert("RGB")))
-        keys.append(path.relative_to(data_dir).as_posix())
-    return torch.stack(tensors, dim=0), keys
+    for key, path in items:
+        if from_cache:
+            arrays.append(np.load(path, allow_pickle=False))
+        else:
+            arrays.append(preprocess_image(path, input_size=input_size, channels=channels))
+        keys.append(key)
+    return np.stack(arrays, axis=0).astype(np.float32, copy=False), keys
 
 
-def infer(model: torch.nn.Module, images: list[Path], data_dir: Path, device: torch.device) -> dict[str, int]:
-    transform = build_transform()
+def infer(session: ort.InferenceSession, data_dir: Path, channels: int, input_size: int) -> dict[str, int]:
+    cached = load_cache(data_dir)
+    from_cache = bool(cached)
+    items = cached if from_cache else list_images(data_dir)
+    input_name = session.get_inputs()[0].name
+    out_name = output_name(session)
     predictions: dict[str, int] = {}
-    batch_size = int(os.environ.get("BATCH_SIZE", "32"))
+    batch_size = int(os.environ.get("BATCH_SIZE", "64"))
     index = 0
-    with torch.inference_mode():
-        while index < len(images):
-            current = images[index : index + batch_size]
-            try:
-                batch, keys = read_batch(current, data_dir, transform)
-                logits = model(batch.to(device, dtype=torch.float32))
-                pred = logits.argmax(dim=1).detach().cpu().tolist()
-                predictions.update({key: int(value) for key, value in zip(keys, pred)})
-                index += batch_size
-            except RuntimeError as exc:
-                if "out of memory" in str(exc).lower() and batch_size > 1:
-                    torch.cuda.empty_cache()
-                    batch_size = max(1, batch_size // 2)
-                    print(f"OOM, reducing batch size to {batch_size}", flush=True)
-                    continue
-                raise
+    while index < len(items):
+        current = items[index : index + batch_size]
+        try:
+            batch, keys = read_batch(current, channels=channels, input_size=input_size, from_cache=from_cache)
+            outputs = session.run([out_name] if out_name else None, {input_name: batch})
+            logits = outputs[0]
+            if logits.ndim != 2 or logits.shape[1] != int(os.environ.get("NUM_CLASSES", "7")):
+                raise RuntimeError(f"ONNX output must be [B, 7], got {tuple(logits.shape)}")
+            preds = logits.argmax(axis=1).tolist()
+            predictions.update({key: int(pred) for key, pred in zip(keys, preds)})
+            index += batch_size
+        except Exception as exc:
+            message = str(exc).lower()
+            if ("out of memory" in message or "cuda" in message) and batch_size > 1:
+                batch_size = max(1, batch_size // 2)
+                print(f"batch failed, reducing batch size to {batch_size}: {exc}", flush=True)
+                continue
+            raise
     return predictions
 
 
@@ -101,13 +109,26 @@ def main() -> None:
     out_dir = Path(os.environ.get("RESULT_DIR", "/out"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = load_student_model(sub_dir, device)
-    images = list_images(data_dir)
-    predictions = infer(model, images, data_dir, device)
-    payload = {"status": "ok", "device": str(device), "count": len(predictions), "predictions": predictions}
+    model_path = find_model(sub_dir)
+    available = ort.get_available_providers()
+    requested = ["CUDAExecutionProvider", "CPUExecutionProvider"] if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"]
+    session = ort.InferenceSession(str(model_path), providers=requested)
+    input_name, channels, input_size = input_shape(session)
+    expected_cache = cache_name(channels, input_size)
+    predictions = infer(session, data_dir, channels, input_size)
+    payload = {
+        "status": "ok",
+        "provider": session.get_providers()[0],
+        "providers": session.get_providers(),
+        "input_name": input_name,
+        "input_channels": channels,
+        "input_size": input_size,
+        "expected_cache": expected_cache,
+        "count": len(predictions),
+        "predictions": predictions,
+    }
     (out_dir / "predictions.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"status": "ok", "device": str(device), "count": len(predictions)}), flush=True)
+    print(json.dumps({key: payload[key] for key in ("status", "provider", "input_channels", "input_size", "count")}), flush=True)
 
 
 if __name__ == "__main__":

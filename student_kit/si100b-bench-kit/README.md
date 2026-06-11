@@ -1,6 +1,6 @@
 # SI100B Emotional Bench 代码框架
 
-你只允许修改 `model/` 目录。其他文件都是评测工具，不要动。
+你只允许修改 `model/` 目录。其他文件是本地检查、ONNX 导出和 devset 评分工具，不要改。
 
 ## 三分钟最短路径
 
@@ -8,70 +8,60 @@
 conda create -n si100b-bench python=3.10 -y
 conda activate si100b-bench
 pip install -r requirements.txt
-python bench.py check
-python bench.py pack --weights 你的权重.pth
+python bench.py check --input-size 112 --channels 3
+python bench.py pack --weights 你的权重.pth --input-size 112 --channels 3
 ```
 
-生成 `submission.zip` 后，到课程评测网站先选择“测试”上传。测试不计分、不占每日配额；测试不通过，正式提交也大概率会失败。
+生成 `model.onnx` 后，到课程评测网站选择相同的输入尺寸和通道，直接上传这个 `.onnx` 文件。第一次建议选择“测试”，测试不计分、不占每日配额。
 
-## 你要改哪里
+## 输入合约
 
-只改：
+平台只接受 ONNX 单输入：
 
 ```text
-model/__init__.py
+[B, C, H, W]
 ```
 
-这个文件里有三条路线：
+- `B` 可以是动态 batch。
+- `C` 只能是 `1` 或 `3`。
+- `H=W`，只能从 `48 / 64 / 96 / 112 / 160 / 224` 中选择。
+- 输出必须是 `[B, 7]` logits。
+- 类别顺序：`angry, disgust, fear, happy, neutral, sad, surprise`。
 
-- 路线 A：默认 SimpleCNN，能直接跑通流程。
-- 路线 B：用 timm 现成模型，只改模型名。
-- 路线 C：把 GitHub 找到的模型代码复制进 `model/` 后 import。
+## 固定预处理
 
-服务器评测镜像已预装常用图像与训练辅助库，包括 `timm`、`opencv-python-headless`、`matplotlib`、`tqdm`、`pandas`、`scipy`。提交包仍然只应包含推理所需代码和权重，不要在 `model/` 中写训练、下载或文件系统扫描逻辑。
+服务器保存的是人脸裁切图。评测时按 ONNX 声明的尺寸和通道读取缓存张量：
 
-无论哪条路线，都必须满足：
+- `C=1`：转灰度，resize，使用 FER2013 train split 统计量 `mean=0.5077, std=0.2551`。
+- `C=3`：转 RGB，resize，使用 ImageNet `mean=[0.485,0.456,0.406]`，`std=[0.229,0.224,0.225]`。
 
-- `build_model()` 不接受参数，返回 `torch.nn.Module`。
-- 输入是 `[B, 3, 224, 224]` 的 float32 tensor。
-- 输出是 `[B, 7]` 的 logits。
-- `pretrained` 必须是 `False`，`weights` 必须是 `None`。
-- 不要在模型文件里读写文件、下载权重、print、训练或加载 checkpoint。
+本地 `bench/transforms.py` 与服务器同源。不要在模型里再做额外 resize/normalize，除非你明确知道自己训练时也完全一致。
 
-平台评测图像会以 RGB 三通道读取并 resize 到 `224×224`。如果你使用 FER2013 灰度图训练，请在训练和验证时显式考虑灰度到三通道的差异，不要假设服务器输入一定是灰度图。
-
-## 一条命令入口
+## 常用命令
 
 ```bash
-python bench.py check
-python bench.py score --weights 你的权重.pth
-python bench.py pack --weights 你的权重.pth
+python bench.py check --input-size 112 --channels 3
+python bench.py pack --weights 你的权重.pth --input-size 112 --channels 3
+python bench.py score --onnx model.onnx --input-size 112 --channels 3
 ```
 
-`pack` 会自动执行 check，然后转换 safetensors，并生成 `submission.zip`。
+`pack` 会：
 
-## 本地评分说明
-
-`score` 会使用 `bench/devset/` 中约 70 张公开小样本。如果你下载的版本暂时没有 devset 图片，`score` 会告诉你等待 TA 发布新版代码框架；这不影响 `check` 和 `pack`。
-
-本地分数只供参考，不计入成绩。排行榜分数即最终平台评测分数，使用约 1k 张排行榜评测图像上的 Macro-F1，并以百分制显示。排行榜评测集包含真实 RGB 裁脸图像和少量轻微增强样本。
+1. 静态检查 `model/__init__.py`。
+2. 加载权重。
+3. 导出 `model.onnx`，batch 维动态。
+4. 写入 ONNX metadata：kit 版本、输入尺寸、通道、打包时间、类别顺序。
+5. 如果 devset 可用，顺手跑本地参考分数。
 
 ## 常见错误
 
-| 报错关键词 | 人话原因 | 怎么改 |
+| 报错关键词 | 原因 | 怎么改 |
 | --- | --- | --- |
-| `Missing key(s) ... module.` | 训练时用了 DataParallel/DDP | `bench.py` 会自动去掉 `module.`；如果还失败，说明模型结构和训练时不一致 |
-| `size mismatch` | 分类头不是 7 类或模型结构改了 | 检查 `num_classes=7`，改完重新训练 |
-| `weights=... 非 None` | 模型定义还想下载预训练权重 | 改成 `weights=None` |
-| `pretrained=True` | 模型定义还想下载预训练权重 | 改成 `pretrained=False` |
-| `output shape (N, 1000)` | 忘了换 7 类分类头 | 按模板把分类头改成 7 类 |
-| `参数量超过上限` | 模型太大 | 换小模型，优先试 resnet18 / mobilenetv3 |
-| 测试超时 | build_model 里写了训练或慢操作 | 把训练代码移出 `model/` |
+| `ONNX input channels` | 网站选择的通道和 ONNX 声明不一致 | 上传时选择和 `pack --channels` 相同的值 |
+| `H/W` | 网站选择的尺寸和 ONNX 声明不一致 | 上传时选择和 `pack --input-size` 相同的值 |
+| `external data` | ONNX 旁挂权重文件 | 使用本框架导出；平台只收单文件 ONNX |
+| `output must be [B, 7]` | 分类头不是 7 类 | 修改最后一层输出为 7 |
+| `Missing key(s)` / `size mismatch` | 权重和模型结构不匹配 | 确认训练代码和 `model/__init__.py` 一致 |
+| `weights=... 非 None` | 模型定义试图下载预训练权重 | 改为 `weights=None` 或 `pretrained=False` |
 
-提问前，请先运行：
-
-```bash
-python bench.py check
-```
-
-并把完整输出截图发给 TA。
+排行榜分数即最终平台评测分数，使用排行榜评测集上的 Macro-F1，并以百分制显示。

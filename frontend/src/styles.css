@@ -943,6 +943,16 @@ select:focus-visible {
   line-height: 1.5;
 }
 
+.input-spec-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.input-spec-grid label {
+  color: var(--muted);
+}
+
 .inline-guide-link {
   display: inline-flex;
   align-items: center;
@@ -1166,6 +1176,10 @@ dd {
   }
 
   .submit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .input-spec-grid {
     grid-template-columns: 1fr;
   }
 

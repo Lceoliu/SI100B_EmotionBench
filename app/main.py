@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import ast
-import io
 import json
 import os
 import secrets
 import shutil
-import struct
 import time
-import zipfile
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +20,8 @@ from passlib.context import CryptContext
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
+
+from app.onnx_validation import ALLOWED_CHANNELS, ALLOWED_INPUT_SIZES, metadata_payload, validate_onnx_model
 
 ROOT = Path(os.environ.get("BENCH_ROOT", ".")).resolve()
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", ROOT / "config.yaml"))
@@ -45,7 +44,7 @@ AUTH_EVENTS: defaultdict[str, deque[float]] = defaultdict(deque)
 MUTATION_NONCES: defaultdict[str, deque[tuple[str, float]]] = defaultdict(deque)
 
 RESOURCE_MANIFEST = [
-    {"id": "student-kit", "title": "代码框架与样本数据集", "filename": "si100b-bench-kit-v0.1.zip", "media_type": "application/zip"},
+    {"id": "student-kit", "title": "代码框架与样本数据集", "filename": "si100b-bench-kit-v0.2.zip", "media_type": "application/zip"},
     {"id": "lab1", "title": "Lab 1：环境配置与图像基础", "filename": "lab1.pdf"},
     {"id": "lab2", "title": "Lab 2：OpenCV 基本操作", "filename": "lab2.pdf"},
     {"id": "lab3", "title": "Lab 3：模型训练", "filename": "lab3.pdf"},
@@ -103,6 +102,12 @@ class Submission(Base):
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     message: Mapped[str] = mapped_column(Text, default="")
     package_path: Mapped[str] = mapped_column(Text)
+    model_format: Mapped[str] = mapped_column(String(24), default="onnx")
+    input_size: Mapped[int] = mapped_column(Integer, default=224)
+    input_channels: Mapped[int] = mapped_column(Integer, default=3)
+    onnx_input_name: Mapped[str] = mapped_column(String(255), default="")
+    onnx_opset: Mapped[int] = mapped_column(Integer, default=0)
+    model_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     param_count: Mapped[int] = mapped_column(Integer, default=0)
     weight_mb: Mapped[float] = mapped_column(Float, default=0.0)
     public_score: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -273,6 +278,11 @@ def submission_payload(submission: Submission, reveal_private: bool = False) -> 
         "mode": submission.mode,
         "status": submission.status,
         "message": submission.message,
+        "model_format": submission.model_format,
+        "input_size": submission.input_size,
+        "input_channels": submission.input_channels,
+        "onnx_input_name": submission.onnx_input_name,
+        "onnx_opset": submission.onnx_opset,
         "param_count": submission.param_count,
         "weight_mb": round(submission.weight_mb, 2),
         "public_score": submission.public_score,
@@ -332,7 +342,7 @@ def remove_submission_artifacts(submission: Submission) -> None:
         return
     archive_path = Path(submission.package_path).resolve()
     if archive_path.is_file() and SUBMISSION_ROOT in archive_path.parents:
-        submit_dir = archive_path.parent
+        submit_dir = archive_path.parent.parent if archive_path.parent.name == "package" else archive_path.parent
         if submit_dir.exists() and SUBMISSION_ROOT in submit_dir.resolve().parents:
             shutil.rmtree(submit_dir, ignore_errors=True)
 
@@ -355,45 +365,6 @@ def admin_user(user: User = Depends(current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="需要 TA 管理员权限。")
     return user
-
-
-def parse_safetensors_header(data: bytes) -> tuple[int, dict[str, Any]]:
-    if len(data) < 8:
-        raise ValueError("model.safetensors is too small.")
-    header_len = struct.unpack("<Q", data[:8])[0]
-    if header_len <= 0 or header_len > 16 * 1024 * 1024:
-        raise ValueError("Invalid safetensors header length.")
-    header_end = 8 + header_len
-    if len(data) < header_end:
-        raise ValueError("Incomplete safetensors header.")
-    header = json.loads(data[8:header_end].decode("utf-8"))
-    dtype_sizes = {
-        "F64": 8,
-        "F32": 4,
-        "F16": 2,
-        "BF16": 2,
-        "I64": 8,
-        "I32": 4,
-        "I16": 2,
-        "I8": 1,
-        "U8": 1,
-        "BOOL": 1,
-    }
-    params = 0
-    for name, tensor in header.items():
-        if name == "__metadata__":
-            continue
-        shape = tensor.get("shape")
-        dtype = tensor.get("dtype")
-        if not isinstance(shape, list) or dtype not in dtype_sizes:
-            raise ValueError(f"Invalid tensor metadata for {name}.")
-        count = 1
-        for dim in shape:
-            if not isinstance(dim, int) or dim < 0:
-                raise ValueError(f"Invalid tensor shape for {name}.")
-            count *= dim
-        params += count
-    return params, header
 
 
 FORBIDDEN_IMPORTS = {
@@ -431,32 +402,20 @@ def validate_model_py(source: str) -> None:
             raise ValueError(f"Forbidden call: {node.func.id}()")
 
 
-def validate_package(file_bytes: bytes, filename: str) -> dict[str, Any]:
+def validate_submission_file(file_bytes: bytes, filename: str, requested_input_size: int, requested_channels: int) -> dict[str, Any]:
     cfg = load_config()
     max_weight_mb = float(cfg.get("max_weight_mb", 200))
     max_params = int(cfg.get("max_params", 50_000_000))
-    if len(file_bytes) > (max_weight_mb + 20) * 1024 * 1024:
-        raise ValueError(f"Archive is larger than the configured {max_weight_mb:.0f} MB limit.")
-
-    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
-        names = [name for name in zf.namelist() if not name.endswith("/")]
-        unsafe = [name for name in names if name.startswith("/") or ".." in Path(name).parts]
-        if unsafe:
-            raise ValueError("Archive contains unsafe paths.")
-        basenames = {Path(name).name: name for name in names}
-        if "model.py" not in basenames or "model.safetensors" not in basenames:
-            raise ValueError("Archive must contain model.py and model.safetensors.")
-
-        source = zf.read(basenames["model.py"]).decode("utf-8")
-        validate_model_py(source)
-        weights = zf.read(basenames["model.safetensors"])
-        param_count, header = parse_safetensors_header(weights)
-        weight_mb = len(weights) / 1024 / 1024
-        if weight_mb > max_weight_mb:
-            raise ValueError(f"model.safetensors is {weight_mb:.1f} MB; limit is {max_weight_mb:.0f} MB.")
-        if param_count > max_params:
-            raise ValueError(f"Model has {param_count:,} parameters; limit is {max_params:,}.")
-    return {"param_count": param_count, "weight_mb": weight_mb, "tensor_count": len(header)}
+    if not filename.lower().endswith(".onnx"):
+        raise ValueError("请直接上传单个 .onnx 文件，不再接受 zip/model.py/safetensors。")
+    meta = validate_onnx_model(
+        file_bytes,
+        requested_input_size=requested_input_size,
+        requested_channels=requested_channels,
+        max_model_mb=max_weight_mb,
+        max_params=max_params,
+    )
+    return metadata_payload(meta, model_mb=len(file_bytes) / 1024 / 1024)
 
 
 def resource_payload(item: dict[str, str]) -> dict[str, Any]:
@@ -558,6 +517,18 @@ def ensure_schema() -> None:
         submission_columns = {row["name"] for row in rows}
         if rows and "mode" not in submission_columns:
             conn.execute(text("ALTER TABLE submissions ADD COLUMN mode VARCHAR(24) DEFAULT 'public' NOT NULL"))
+        if rows and "model_format" not in submission_columns:
+            conn.execute(text("ALTER TABLE submissions ADD COLUMN model_format VARCHAR(24) DEFAULT 'onnx' NOT NULL"))
+        if rows and "input_size" not in submission_columns:
+            conn.execute(text("ALTER TABLE submissions ADD COLUMN input_size INTEGER DEFAULT 224 NOT NULL"))
+        if rows and "input_channels" not in submission_columns:
+            conn.execute(text("ALTER TABLE submissions ADD COLUMN input_channels INTEGER DEFAULT 3 NOT NULL"))
+        if rows and "onnx_input_name" not in submission_columns:
+            conn.execute(text("ALTER TABLE submissions ADD COLUMN onnx_input_name VARCHAR(255) DEFAULT '' NOT NULL"))
+        if rows and "onnx_opset" not in submission_columns:
+            conn.execute(text("ALTER TABLE submissions ADD COLUMN onnx_opset INTEGER DEFAULT 0 NOT NULL"))
+        if rows and "model_metadata_json" not in submission_columns:
+            conn.execute(text("ALTER TABLE submissions ADD COLUMN model_metadata_json TEXT DEFAULT '{}' NOT NULL"))
 
 
 @app.on_event("startup")
@@ -586,6 +557,13 @@ def api_config() -> dict[str, Any]:
         "max_weight_mb": cfg.get("max_weight_mb", 200),
         "eval_timeout_sec": cfg.get("eval_timeout_sec", 600),
         "num_classes": cfg.get("num_classes", 7),
+        "submission_format": "onnx",
+        "allowed_input_sizes": sorted(ALLOWED_INPUT_SIZES),
+        "allowed_input_channels": sorted(ALLOWED_CHANNELS),
+        "normalize": {
+            "gray": {"mean": [0.5077], "std": [0.2551]},
+            "rgb": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+        },
         "freeze_leaderboard": bool(cfg.get("freeze_leaderboard", False)),
         "reveal_private": bool(cfg.get("reveal_private", False)),
         "reveal_realworld": bool(cfg.get("reveal_realworld", False)),
@@ -754,6 +732,8 @@ async def update_my_profile(request: Request, user: User = Depends(current_user)
 async def create_submission(
     request: Request,
     mode: str = Form("public"),
+    input_size: int = Form(224),
+    input_channels: int = Form(3),
     package: UploadFile = File(...),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
@@ -761,8 +741,8 @@ async def create_submission(
     verify_mutation_request(request)
     if mode not in {"public", "dry-run"}:
         raise HTTPException(status_code=400, detail="未知提交模式。")
-    if not package.filename or not package.filename.endswith(".zip"):
-        raise HTTPException(status_code=400, detail="请上传 .zip 压缩包。")
+    if not package.filename or not package.filename.lower().endswith(".onnx"):
+        raise HTTPException(status_code=400, detail="请直接上传单个 .onnx 文件。")
 
     cfg = load_config()
     quota = int(cfg.get("quota_per_day", 2))
@@ -780,14 +760,18 @@ async def create_submission(
 
     content = await package.read()
     try:
-        meta = validate_package(content, package.filename)
+        meta = validate_submission_file(content, package.filename, input_size, input_channels)
     except Exception as exc:
         submission = Submission(
             user_id=user.id,
             filename=Path(package.filename).name,
+            mode=mode,
             status="rejected",
             message=str(exc),
             package_path="",
+            model_format="onnx",
+            input_size=input_size,
+            input_channels=input_channels,
             param_count=0,
             weight_mb=0,
         )
@@ -798,11 +782,11 @@ async def create_submission(
     token = secrets.token_hex(8)
     submit_dir = SUBMISSION_ROOT / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{user.student_id}-{token}"
     submit_dir.mkdir(parents=True, exist_ok=False)
-    archive_path = submit_dir / "submission.zip"
-    archive_path.write_bytes(content)
-    with zipfile.ZipFile(io.BytesIO(content)) as zf:
-        zf.extractall(submit_dir / "package")
-    (submit_dir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    package_dir = submit_dir / "package"
+    package_dir.mkdir()
+    model_path = package_dir / "model.onnx"
+    model_path.write_bytes(content)
+    (submit_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     status = "queued"
     message = "Queued for public evaluation." if mode == "public" else "已加入测试沙箱兼容性检查队列。"
@@ -812,7 +796,13 @@ async def create_submission(
         mode=mode,
         status=status,
         message=message,
-        package_path=str(archive_path),
+        package_path=str(model_path),
+        model_format="onnx",
+        input_size=int(meta["input_size"]),
+        input_channels=int(meta["input_channels"]),
+        onnx_input_name=str(meta["input_name"]),
+        onnx_opset=int(meta["opset"]),
+        model_metadata_json=json.dumps(meta.get("metadata_props", {}), ensure_ascii=False),
         param_count=int(meta["param_count"]),
         weight_mb=float(meta["weight_mb"]),
     )

@@ -14,7 +14,7 @@ import yaml
 from docker.types import DeviceRequest
 from sqlalchemy import select
 
-from app.main import Base, Score, SessionLocal, Submission, engine, validate_model_py, write_sync_index
+from app.main import Base, Score, SessionLocal, Submission, engine, write_sync_index
 from worker.scoring import score_predictions, write_confusion_matrix_png
 
 
@@ -79,18 +79,28 @@ def claim_next_submission() -> int | None:
 
 def package_dir_for(submission: Submission) -> Path:
     archive = Path(submission.package_path)
-    package_dir = archive.parent / "package"
+    package_dir = archive.parent if archive.suffix.lower() == ".onnx" else archive.parent / "package"
     if not package_dir.exists():
         raise FileNotFoundError(f"submission package directory not found: {package_dir}")
     return package_dir
 
 
 def run_static_check(package_dir: Path) -> None:
-    model_files = list(package_dir.rglob("model.py"))
-    weight_files = list(package_dir.rglob("model.safetensors"))
-    if len(model_files) != 1 or len(weight_files) != 1:
-        raise ValueError("submission package must contain exactly one model.py and one model.safetensors")
-    validate_model_py(model_files[0].read_text(encoding="utf-8"))
+    onnx_files = list(package_dir.rglob("*.onnx"))
+    if len(onnx_files) != 1:
+        raise ValueError("submission must contain exactly one .onnx model file")
+
+
+def cache_name(channels: int, input_size: int) -> str:
+    return f"c{channels}_s{input_size}"
+
+
+def evaluation_data_dir(images_dir: Path, channels: int, input_size: int) -> Path:
+    split_dir = images_dir.parent
+    cache_dir = split_dir / "cache" / cache_name(channels, input_size)
+    if (cache_dir / "cache_manifest.json").exists():
+        return cache_dir
+    return images_dir
 
 
 def available_splits(mode: str) -> list[tuple[str, Path, Path | None]]:
@@ -123,9 +133,6 @@ def run_eval_container(package_dir: Path, images_dir: Path, out_dir: Path, timeo
     client = docker.from_env()
     environment = {
         "NUM_CLASSES": str(cfg.get("num_classes", 7)),
-        "INPUT_SIZE": str(cfg.get("input_size", 224)),
-        "NORMALIZE_MEAN": json.dumps(cfg.get("normalize", {}).get("mean", [0.485, 0.456, 0.406])),
-        "NORMALIZE_STD": json.dumps(cfg.get("normalize", {}).get("std", [0.229, 0.224, 0.225])),
         "RESULT_DIR": "/out",
     }
     volumes = {
@@ -210,10 +217,11 @@ def evaluate_submission(submission_id: int) -> None:
         out_dir = results_dir / split
         with SessionLocal() as db:
             submission = db.get(Submission, submission_id)
-            submission.message = f"Evaluating {split} split in sandbox."
+            data_dir = evaluation_data_dir(images_dir, int(submission.input_channels or 3), int(submission.input_size or 224))
+            submission.message = f"Evaluating {split} split in sandbox ({submission.input_channels}x{submission.input_size})."
             db.commit()
 
-        output = run_eval_container(package_dir, images_dir, out_dir, timeout_sec, cfg)
+        output = run_eval_container(package_dir, data_dir, out_dir, timeout_sec, cfg)
         (logs_dir / f"{split}.log").write_bytes(output)
         predictions_path = out_dir / "predictions.json"
         if labels_path is not None:

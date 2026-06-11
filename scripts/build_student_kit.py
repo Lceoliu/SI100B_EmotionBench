@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KIT_ROOT = ROOT / "student_kit" / "si100b-bench-kit"
 OUT_DIR = ROOT / "storage" / "resources"
-OUT_ZIP = OUT_DIR / "si100b-bench-kit-v0.1.zip"
+OUT_ZIP = OUT_DIR / "si100b-bench-kit-v0.2.zip"
 
 
 def main() -> None:

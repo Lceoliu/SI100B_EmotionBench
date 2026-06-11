@@ -146,8 +146,9 @@ export function DatasetGuide({ resources, onBack }) {
           <div>
             <h2>输入格式与类别顺序</h2>
             <p>
-              测试平台会把每张图读取为 RGB，resize 到 <code>224×224</code>，再做 ImageNet mean/std 归一化。
-              即使训练集只有灰度图，你的提交模型也必须能接收 <code>[B, 3, 224, 224]</code> 的输入Tensor。
+              测试平台只接受 NCHW ONNX 输入。batch 维可以动态，通道数只能是 <code>1</code> 或 <code>3</code>，
+              尺寸只能从 <code>48 / 64 / 96 / 112 / 160 / 224</code> 中选择，且 <code>H=W</code>。
+              服务器会按 ONNX 声明的形状读取缓存后的固定预处理张量。
             </p>
             <div className="class-strip" aria-label="类别顺序">
               {datasetExamples.map((item, index) => (
@@ -160,7 +161,8 @@ export function DatasetGuide({ resources, onBack }) {
               <div><dt>公开小样本</dt><dd>70 张</dd></div>
               <div><dt>排行榜评测集</dt><dd>约 1k 张</dd></div>
               <div><dt>显示分数</dt><dd>Macro-F1 × 100</dd></div>
-              <div><dt>图像通道</dt><dd>RGB</dd></div>
+              <div><dt>提交格式</dt><dd>单文件 ONNX</dd></div>
+              <div><dt>输入布局</dt><dd>NCHW</dd></div>
             </dl>
           </div>
         </div>
@@ -202,8 +204,12 @@ export function DatasetGuide({ resources, onBack }) {
             <p>它只用于检查读取、类别顺序和提交流程。最终排行榜使用的是排行榜评测集，不公开标签和图片。</p>
           </div>
           <div>
-            <strong>注意灰度训练与 RGB 评测的差异</strong>
-            <p>如果你用 FER2013 训练，可以在训练时显式复制到三通道，或在模型前几层中处理 RGB 到灰度/特征的映射。</p>
+            <strong>灰度和 RGB 都受支持</strong>
+            <p>如果 ONNX 声明 <code>C=1</code>，服务器会转灰度并使用 FER2013 train split 统计量；如果 <code>C=3</code>，服务器使用 RGB 与 ImageNet mean/std。</p>
+          </div>
+          <div>
+            <strong>预处理规则不可自定义</strong>
+            <p>resize 插值、通道转换和归一化常数由平台代码锁定。本地代码框架和服务器使用同一份 transforms。</p>
           </div>
           <div>
             <strong>合理使用数据增强和验证集</strong>
@@ -364,7 +370,7 @@ export function Leaderboard({ rows, admin, onDelete }) {
     { key: 'group_name', label: '小组', render: (row) => row.group_name || '—' },
     { key: 'public_score', label: '最终分数', render: (row) => <strong>{fmtScore(row.public_score)}</strong> },
     { key: 'params', label: '参数量', render: (row) => fmtParams(row.param_count) },
-    { key: 'weight', label: '权重大小', render: (row) => `${row.weight_mb} MB` },
+    { key: 'weight', label: 'ONNX 大小', render: (row) => `${row.weight_mb} MB` },
     { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
     { key: 'updated_at', label: '更新时间', render: (row) => fmtTime(row.updated_at) }
   ];
@@ -393,10 +399,14 @@ export function Leaderboard({ rows, admin, onDelete }) {
 export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
   const [file, setFile] = useState(null);
   const [mode, setMode] = useState('public');
+  const [inputSize, setInputSize] = useState(112);
+  const [inputChannels, setInputChannels] = useState(3);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [frameworkConfirmed, setFrameworkConfirmed] = useState(false);
+  const allowedSizes = config.allowed_input_sizes || [48, 64, 96, 112, 160, 224];
+  const allowedChannels = config.allowed_input_channels || [1, 3];
 
   async function submit(event) {
     event.preventDefault();
@@ -407,11 +417,11 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
       return;
     }
     if (!file) {
-      setError('请先选择 submission.zip。');
+      setError('请先选择 model.onnx。');
       return;
     }
     if (!frameworkConfirmed) {
-      const ok = window.confirm('提交前请确认：本次 submission.zip 使用了平台提供的代码框架生成，并已在本地运行 python bench.py check 或测试流程。是否继续提交？');
+      const ok = window.confirm('提交前请确认：本次 ONNX 文件使用了平台提供的代码框架导出，并已在本地运行 python bench.py check 或测试流程。是否继续提交？');
       if (!ok) {
         setError('请先使用代码框架完成本地检查后再提交。');
         return;
@@ -420,6 +430,8 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
     }
     const body = new FormData();
     body.append('mode', mode);
+    body.append('input_size', String(inputSize));
+    body.append('input_channels', String(inputChannels));
     body.append('package', file);
     setBusy(true);
     try {
@@ -437,26 +449,40 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
   return (
     <section className="window">
       <header className="window-bar">
-        <span>提交模型包</span>
-        <small>safetensors 静态检查</small>
+        <span>提交 ONNX 模型</span>
+        <small>单文件 ONNX · NCHW 输入校验</small>
       </header>
       <div className="submit-grid">
         <form className="submit-form" onSubmit={submit}>
           <div className="requirements">
             <ClipboardCheck size={18} />
             <div>
-              <strong>压缩包要求</strong>
-              <p>ZIP 内必须包含 <code>model.py</code> 和 <code>model.safetensors</code>。请使用我们提供的代码框架修改、测试、打包和提交。第一次提交建议先测试：测试会进入真实环境检查，不计分、不占每日配额。</p>
+              <strong>ONNX 文件要求</strong>
+              <p>请直接上传单个 <code>.onnx</code> 文件。模型必须是 NCHW 单输入，batch 可动态，输出为 <code>[B, 7]</code> logits；禁止 external data 旁挂权重。第一次提交建议先测试：测试会进入真实环境检查，不计分、不占每日配额。</p>
               <button type="button" className="inline-guide-link" onClick={onOpenGuide}>
                 <BookOpen size={15} />
                 查看数据集说明、样例与代码框架下载
               </button>
             </div>
           </div>
+          <div className="input-spec-grid">
+            <label>
+              输入尺寸 H=W
+              <select value={inputSize} onChange={(event) => setInputSize(Number(event.target.value))}>
+                {allowedSizes.map((size) => <option key={size} value={size}>{size} × {size}</option>)}
+              </select>
+            </label>
+            <label>
+              输入通道 C
+              <select value={inputChannels} onChange={(event) => setInputChannels(Number(event.target.value))}>
+                {allowedChannels.map((channels) => <option key={channels} value={channels}>{channels === 1 ? '1 · 灰度' : '3 · RGB'}</option>)}
+              </select>
+            </label>
+          </div>
           <label className="file-input">
             <FileArchive size={20} />
-            <span>{file ? file.name : '选择 submission.zip'}</span>
-            <input type="file" accept=".zip" onChange={(event) => setFile(event.target.files?.[0] || null)} />
+            <span>{file ? file.name : '选择 model.onnx'}</span>
+            <input type="file" accept=".onnx" onChange={(event) => setFile(event.target.files?.[0] || null)} />
           </label>
           <div className="segmented mode-select">
             <button type="button" className={mode === 'public' ? 'active' : ''} onClick={() => setMode('public')}>
@@ -476,9 +502,10 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
           <dl>
             <div><dt>每日次数</dt><dd>{config.quota_per_day ?? 2}</dd></div>
             <div><dt>最大参数量</dt><dd>{fmtParams(config.max_params)}</dd></div>
-            <div><dt>权重上限</dt><dd>{config.max_weight_mb ?? 200} MB</dd></div>
+            <div><dt>ONNX 上限</dt><dd>{config.max_weight_mb ?? 200} MB</dd></div>
             <div><dt>评测超时</dt><dd>{config.eval_timeout_sec ?? 600}s</dd></div>
             <div><dt>类别数</dt><dd>{config.num_classes ?? 7}</dd></div>
+            <div><dt>归一化</dt><dd>{inputChannels === 1 ? 'FER2013 灰度' : 'ImageNet RGB'}</dd></div>
           </dl>
         </div>
       </div>

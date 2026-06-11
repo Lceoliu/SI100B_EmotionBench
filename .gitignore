@@ -1,17 +1,30 @@
+# Runtime data and generated artifacts
+storage/bench.db
+storage/submissions/
+storage/results/
+storage/smoke_*/
+results/
+data/**/cache/
+data/**/cache_manifest.json
+data/**/cache/summary.json
+
+# Datasets are managed outside git
+data/dryrun/
+data/final/
+data/private/
+data/public/
+data/realworld/
+
+# Frontend/build caches
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Python caches
 __pycache__/
 *.py[cod]
-.venv/
-.env.local
-*.db
-*.db-*
-/data/**
-!/data/.gitkeep
-!/data/public/.gitkeep
-!/data/private/.gitkeep
-!/data/realworld/.gitkeep
-/storage/**
-!/storage/.gitkeep
-/results/**
-!/results/.gitkeep
-/logs/**
-!/logs/.gitkeep
+.pytest_cache/
+
+# Logs/temp
+*.log
+.DS_Store
