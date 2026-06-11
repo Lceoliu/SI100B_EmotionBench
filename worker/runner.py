@@ -12,7 +12,7 @@ import docker
 from docker.errors import NotFound
 import yaml
 from docker.types import DeviceRequest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.main import Base, Score, SessionLocal, Submission, engine, write_sync_index
 from worker.scoring import score_predictions, write_confusion_matrix_png
@@ -62,19 +62,45 @@ def reset_stuck_jobs() -> None:
 
 
 def claim_next_submission() -> int | None:
-    with SessionLocal() as db:
-        submission = db.scalars(
-            select(Submission)
-            .where(Submission.status == "queued", Submission.package_path != "seed", Submission.package_path != "")
-            .order_by(Submission.created_at.asc())
-            .limit(1)
-        ).first()
-        if submission is None:
-            return None
-        submission.status = "running"
-        submission.message = "Worker claimed task; preparing sandbox."
-        db.commit()
-        return submission.id
+    for _ in range(3):
+        with engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM submissions
+                    WHERE status = 'queued'
+                      AND package_path != 'seed'
+                      AND package_path != ''
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """
+                )
+            ).first()
+            if row is None:
+                return None
+            submission_id = int(row[0])
+            result = conn.execute(
+                text(
+                    """
+                    UPDATE submissions
+                    SET status = 'running',
+                        message = :message,
+                        updated_at = :updated_at
+                    WHERE id = :submission_id
+                      AND status = 'queued'
+                    """
+                ),
+                {
+                    "submission_id": submission_id,
+                    "message": "Worker claimed task; preparing sandbox.",
+                    "updated_at": datetime.now(timezone.utc),
+                },
+            )
+            if result.rowcount == 1:
+                return submission_id
+        time.sleep(0.05)
+    return None
 
 
 def package_dir_for(submission: Submission) -> Path:

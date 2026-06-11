@@ -14,6 +14,8 @@ services:
       HOST_BENCH_ROOT: /home/SI100B_26Fall/emotion-bench
       DATABASE_URL: "${DATABASE_URL:-sqlite:////workspace/storage/bench.db}"
       CONFIG_PATH: /workspace/config.yaml
+      SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY in .env}"
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-0}"
     volumes:
       - ./:/workspace
     working_dir: /workspace
@@ -35,6 +37,8 @@ services:
       HOST_BENCH_ROOT: /home/SI100B_26Fall/emotion-bench
       DATABASE_URL: "${DATABASE_URL:-sqlite:////workspace/storage/bench.db}"
       CONFIG_PATH: /workspace/config.yaml
+      SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY in .env}"
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-0}"
       EVAL_IMAGE: "${EVAL_IMAGE:-emotion-bench-eval:dev}"
     volumes:
       - ./:/workspace

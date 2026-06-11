@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import secrets
 import shutil
 import time
@@ -32,7 +33,13 @@ RESOURCE_ROOT = STORAGE_ROOT / "resources"
 RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", ROOT / "results")).resolve()
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", ROOT / "frontend" / "dist")).resolve()
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{STORAGE_ROOT / 'bench.db'}")
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-emotion-bench-change-me")
+APP_ENV = os.environ.get("APP_ENV", "dev").lower()
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    if APP_ENV in {"prod", "production"}:
+        raise RuntimeError("SECRET_KEY must be set in production.")
+    SECRET_KEY = "dev-emotion-bench-change-me"
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "1" if APP_ENV in {"prod", "production"} else "0") == "1"
 INVITE_CODE = os.environ.get("INVITE_CODE", "SI100B-2026")
 DOWNLOAD_LIMIT_PER_MINUTE = int(os.environ.get("DOWNLOAD_LIMIT_PER_MINUTE", "40"))
 AUTH_LIMIT_PER_MINUTE = int(os.environ.get("AUTH_LIMIT_PER_MINUTE", "20"))
@@ -146,7 +153,9 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 app = FastAPI(title="EmotionBench", version="0.1-dev")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=SESSION_COOKIE_SECURE)
+
+EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@shanghaitech\.edu\.cn$")
 
 
 @app.middleware("http")
@@ -418,6 +427,29 @@ def validate_submission_file(file_bytes: bytes, filename: str, requested_input_s
     return metadata_payload(meta, model_mb=len(file_bytes) / 1024 / 1024)
 
 
+def parse_deadline(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw or "XX" in raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def ensure_public_submission_open(cfg: dict[str, Any]) -> None:
+    if bool(cfg.get("freeze_leaderboard", False)):
+        raise HTTPException(status_code=403, detail="排行榜已锁定，暂不接受正式提交。")
+    deadline = parse_deadline(cfg.get("final_pick_deadline"))
+    if deadline is not None and datetime.now(timezone.utc) > deadline:
+        raise HTTPException(status_code=403, detail="正式提交截止时间已过。")
+
+
 def resource_payload(item: dict[str, str]) -> dict[str, Any]:
     path = (RESOURCE_ROOT / item["filename"]).resolve()
     available = path.is_file() and RESOURCE_ROOT in path.parents
@@ -467,12 +499,17 @@ def ensure_admin_user(db: Session) -> None:
         db.flush()
     admin = db.scalar(select(User).where(User.student_id == "admin"))
     if admin is None:
+        initial_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or os.environ.get("ADMIN_PASSWORD")
+        if not initial_password:
+            if APP_ENV in {"prod", "production"}:
+                raise RuntimeError("ADMIN_INITIAL_PASSWORD must be set when creating the admin user in production.")
+            initial_password = "wo598053345@"
         admin = User(
             student_id="admin",
             display_name="TA 管理员",
             role="admin",
             group_name="TA",
-            password_hash=pwd_context.hash("wo598053345@"),
+            password_hash=pwd_context.hash(initial_password),
         )
         db.add(admin)
     else:
@@ -480,7 +517,11 @@ def ensure_admin_user(db: Session) -> None:
         admin.role = "admin"
         admin.group_name = "TA"
         admin.disabled = False
-        admin.password_hash = pwd_context.hash("wo598053345@")
+        if os.environ.get("ADMIN_RESET_PASSWORD_ON_STARTUP") == "1":
+            reset_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or os.environ.get("ADMIN_PASSWORD")
+            if not reset_password:
+                raise RuntimeError("ADMIN_RESET_PASSWORD_ON_STARTUP=1 requires ADMIN_INITIAL_PASSWORD.")
+            admin.password_hash = pwd_context.hash(reset_password)
     db.commit()
 
 
@@ -610,7 +651,7 @@ async def register(request: Request, db: Session = Depends(get_db)) -> dict[str,
     student_id = str(data.get("email") or data.get("student_id") or "").strip().lower()
     display_name = str(data.get("display_name", "")).strip()
     password = str(data.get("password", ""))
-    if not student_id.endswith("@shanghaitech.edu.cn"):
+    if not EMAIL_RE.fullmatch(student_id) or len(student_id) > 64:
         raise HTTPException(status_code=400, detail="请使用 @shanghaitech.edu.cn 邮箱注册。")
     if "@" not in student_id or len(display_name) < 2 or len(password) < 8:
         raise HTTPException(status_code=400, detail="请填写有效邮箱、姓名，以及至少 8 位密码。")
@@ -745,6 +786,8 @@ async def create_submission(
         raise HTTPException(status_code=400, detail="请直接上传单个 .onnx 文件。")
 
     cfg = load_config()
+    if mode == "public":
+        ensure_public_submission_open(cfg)
     quota = int(cfg.get("quota_per_day", 2))
     today = datetime.now(timezone.utc).date()
     today_count = db.scalar(
@@ -780,7 +823,7 @@ async def create_submission(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     token = secrets.token_hex(8)
-    submit_dir = SUBMISSION_ROOT / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{user.student_id}-{token}"
+    submit_dir = SUBMISSION_ROOT / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-u{user.id}-{token}"
     submit_dir.mkdir(parents=True, exist_ok=False)
     package_dir = submit_dir / "package"
     package_dir.mkdir()
@@ -815,6 +858,7 @@ async def create_submission(
 @app.post("/api/submissions/{submission_id}/final")
 def mark_final(submission_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     verify_mutation_request(request)
+    ensure_public_submission_open(load_config())
     submission = db.get(Submission, submission_id)
     if not submission or submission.user_id != user.id:
         raise HTTPException(status_code=404, detail="提交记录不存在。")
