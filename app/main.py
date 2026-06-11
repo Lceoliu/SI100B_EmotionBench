@@ -44,7 +44,7 @@ AUTH_EVENTS: defaultdict[str, deque[float]] = defaultdict(deque)
 MUTATION_NONCES: defaultdict[str, deque[tuple[str, float]]] = defaultdict(deque)
 
 RESOURCE_MANIFEST = [
-    {"id": "student-kit", "title": "代码框架与样本数据集", "filename": "si100b-bench-kit-v0.2.zip", "media_type": "application/zip"},
+    {"id": "student-kit", "title": "代码框架与样本数据集", "filename": "si100b-bench-kit-v0.2.1.zip", "media_type": "application/zip"},
     {"id": "lab1", "title": "Lab 1：环境配置与图像基础", "filename": "lab1.pdf"},
     {"id": "lab2", "title": "Lab 2：OpenCV 基本操作", "filename": "lab2.pdf"},
     {"id": "lab3", "title": "Lab 3：模型训练", "filename": "lab3.pdf"},

@@ -8,7 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KIT_ROOT = ROOT / "student_kit" / "si100b-bench-kit"
 OUT_DIR = ROOT / "storage" / "resources"
-OUT_ZIP = OUT_DIR / "si100b-bench-kit-v0.2.zip"
+OUT_ZIP = OUT_DIR / "si100b-bench-kit-v0.2.1.zip"
+SKIP_DIRS = {"__pycache__", ".venv", "venv", "env", "checkpoints", "demo_outputs", "datasets"}
+SKIP_FILES = {"model.onnx", "local_metrics.json", "local_confusion.png"}
 
 
 def main() -> None:
@@ -21,7 +23,7 @@ def main() -> None:
         for path in sorted(KIT_ROOT.rglob("*")):
             if path.is_dir():
                 continue
-            if path.name == "__pycache__" or "__pycache__" in path.parts:
+            if path.name in SKIP_FILES or any(part in SKIP_DIRS for part in path.parts):
                 continue
             arcname = Path("si100b-bench-kit") / path.relative_to(KIT_ROOT)
             zf.write(path, arcname.as_posix())

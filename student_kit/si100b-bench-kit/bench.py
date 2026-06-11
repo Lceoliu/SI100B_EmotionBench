@@ -28,7 +28,7 @@ MODEL_FILE = MODEL_DIR / "__init__.py"
 DEVSET_DIR = ROOT / "bench" / "devset"
 DEVSET_IMAGES = DEVSET_DIR / "images"
 DEVSET_LABELS = DEVSET_DIR / "labels.csv"
-KIT_VERSION = "0.2-onnx"
+KIT_VERSION = "0.2.1-onnx"
 NUM_CLASSES = 7
 MAX_PARAMS = 50_000_000
 MAX_MODEL_MB = 200
@@ -172,10 +172,6 @@ def strip_module_prefix(state: dict) -> dict:
 def load_state(path: Path) -> dict:
     if not path.exists():
         raise BenchError(f"找不到权重文件：{path}")
-    if path.suffix == ".safetensors":
-        from safetensors.torch import load_file
-
-        return load_file(str(path), device="cpu")
     if path.suffix in {".pth", ".pt", ".ckpt"}:
         obj = torch.load(path, map_location="cpu", weights_only=True)
         if isinstance(obj, dict):
@@ -183,7 +179,7 @@ def load_state(path: Path) -> dict:
         if not isinstance(obj, dict):
             raise BenchError("权重文件不是 state_dict。请保存 model.state_dict()。")
         return strip_module_prefix(obj)
-    raise BenchError(f"无法识别权重格式：{path.suffix}。支持 .pth/.pt/.ckpt/.safetensors。")
+    raise BenchError(f"无法识别权重格式：{path.suffix}。支持 .pth/.pt/.ckpt。")
 
 
 def load_weights(model: torch.nn.Module, path: Path) -> torch.nn.Module:

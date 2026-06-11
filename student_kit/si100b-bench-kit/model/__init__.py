@@ -50,16 +50,20 @@ def build_model() -> nn.Module:
 # =========================
 # 路线 B：我想用现成强模型
 # =========================
-# 需要先 pip install timm。服务器测试/正式评测也已安装 timm。
+# 推荐先用 torchvision 自带的 ResNet18。提交用的模型必须 weights=None，
+# 不要让评测服务器联网下载 ImageNet 权重。
 #
-# import timm
+# from torchvision.models import resnet18
 #
 # def build_model() -> nn.Module:
-#     return timm.create_model("resnet18", num_classes=NUM_CLASSES, pretrained=False)
+#     model = resnet18(weights=None)
+#     model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
+#     return model
 #
-# 可尝试模型名：
-# resnet18, resnet34, mobilenetv3_small_100, mobilenetv3_large_100,
-# efficientnet_b0, convnext_tiny
+# 如果训练时想用 ImageNet 预训练：
+# 1. 运行 train_example.py --arch resnet18 --imagenet ...
+# 2. 训练完成后仍然保持这里 weights=None。
+# 3. 用 bench.py pack 加载你训练好的 checkpoints/best.pth。
 
 
 # =========================
