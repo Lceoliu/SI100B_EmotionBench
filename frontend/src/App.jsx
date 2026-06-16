@@ -18,17 +18,17 @@ const footerLinks = [
   {
     href: 'https://github.com/Lceoliu',
     label: 'GitHub',
-    icon: 'https://cdn.jsdelivr.net/npm/simple-icons@16.23.0/icons/github.svg'
+    icon: 'https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg'
   },
   {
     href: 'https://www.linkedin.com/in/chang-liu-143b303a0/',
     label: 'LinkedIn',
-    icon: 'https://cdn.jsdelivr.net/npm/simple-icons@16.23.0/icons/linkedin.svg'
+    icon: 'https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg'
   },
   {
     href: 'https://lceoliu.github.io/SP26_SI100B_Tutorial/',
     label: 'Tutorial',
-    icon: 'https://cdn.jsdelivr.net/npm/lucide-static@1.18.0/icons/book-open.svg'
+    icon: 'https://upload.wikimedia.org/wikipedia/commons/0/0f/Book-icon.svg'
   }
 ];
 
@@ -374,7 +374,7 @@ function App() {
         <nav className="footer-links" aria-label="项目链接">
           {footerLinks.map((link) => (
             <a key={link.href} href={link.href} target="_blank" rel="noreferrer" aria-label={link.label}>
-              <span className="footer-icon" style={{ '--footer-icon-url': `url("${link.icon}")` }} aria-hidden="true" />
+              <img className="footer-icon" src={link.icon} alt="" loading="lazy" aria-hidden="true" />
               <span>{link.label}</span>
             </a>
           ))}
