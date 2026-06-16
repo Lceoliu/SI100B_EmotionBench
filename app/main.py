@@ -8,7 +8,7 @@ import secrets
 import shutil
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from passlib.context import CryptContext
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, func, select, text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, event, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -43,6 +43,8 @@ SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "1" if APP_ENV i
 INVITE_CODE = os.environ.get("INVITE_CODE", "SI100B-2026")
 DOWNLOAD_LIMIT_PER_MINUTE = int(os.environ.get("DOWNLOAD_LIMIT_PER_MINUTE", "40"))
 AUTH_LIMIT_PER_MINUTE = int(os.environ.get("AUTH_LIMIT_PER_MINUTE", "20"))
+DEFAULT_QUOTA_PER_DAY = 4
+COURSE_TZ = timezone(timedelta(hours=8))
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
@@ -52,6 +54,7 @@ MUTATION_NONCES: defaultdict[str, deque[tuple[str, float]]] = defaultdict(deque)
 
 RESOURCE_MANIFEST = [
     {"id": "student-kit", "title": "代码框架与样本数据集", "filename": "si100b-bench-kit-v0.2.2.zip", "media_type": "application/zip"},
+    {"id": "fer2013", "title": "FER2013 训练与测试数据集", "filename": "fer2013-train-test.zip", "media_type": "application/zip"},
     {"id": "lab1", "title": "Lab 1：环境配置与图像基础", "filename": "lab1.pdf"},
     {"id": "lab2", "title": "Lab 2：OpenCV 基本操作", "filename": "lab2.pdf"},
     {"id": "lab3", "title": "Lab 3：模型训练", "filename": "lab3.pdf"},
@@ -85,6 +88,8 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(24), default="student")
     group_name: Mapped[str] = mapped_column(String(120), default="")
     disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    submit_disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    leaderboard_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     submissions: Mapped[list["Submission"]] = relationship(back_populates="user")
@@ -97,6 +102,16 @@ class InviteCode(Base):
     code: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     label: Mapped[str] = mapped_column(String(160), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
 
 
 class Submission(Base):
@@ -150,6 +165,18 @@ class Score(Base):
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
+
+
+if DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 app = FastAPI(title="EmotionBench", version="0.1-dev")
@@ -168,11 +195,28 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
-def load_config() -> dict[str, Any]:
+def load_file_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         return {}
     with CONFIG_PATH.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def load_config() -> dict[str, Any]:
+    cfg = load_file_config()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT key, value FROM settings")).mappings().all()
+        for row in rows:
+            key = str(row["key"])
+            value = str(row["value"])
+            if key in {"freeze_leaderboard", "reveal_private", "reveal_realworld"}:
+                cfg[key] = value.lower() in {"1", "true", "yes", "on"}
+            else:
+                cfg[key] = value
+    except Exception:
+        pass
+    return cfg
 
 
 def get_db() -> Session:
@@ -200,6 +244,8 @@ def user_payload(user: User) -> dict[str, Any]:
         "role": user.role,
         "group_name": user.group_name or "",
         "disabled": bool(user.disabled),
+        "submit_disabled": bool(user.submit_disabled),
+        "leaderboard_hidden": bool(user.leaderboard_hidden),
     }
 
 
@@ -234,6 +280,51 @@ def check_rate_limit(events: defaultdict[str, deque[float]], key: str, limit: in
     if len(bucket) >= limit:
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试。")
     bucket.append(now)
+
+
+def configured_quota_per_day(cfg: dict[str, Any]) -> int:
+    try:
+        quota = int(cfg.get("quota_per_day", DEFAULT_QUOTA_PER_DAY))
+    except (TypeError, ValueError):
+        quota = DEFAULT_QUOTA_PER_DAY
+    return max(0, quota)
+
+
+def public_submission_day_window(now: datetime | None = None) -> tuple[datetime, datetime]:
+    """Return the current Asia/Shanghai day as naive UTC datetimes for SQLite."""
+    now_utc = now or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    local_now = now_utc.astimezone(COURSE_TZ)
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = local_start + timedelta(days=1)
+    return (
+        local_start.astimezone(timezone.utc).replace(tzinfo=None),
+        local_end.astimezone(timezone.utc).replace(tzinfo=None),
+    )
+
+
+def public_submission_count_today(db: Session, user_id: int, now: datetime | None = None) -> int:
+    day_start_utc, day_end_utc = public_submission_day_window(now)
+    return int(
+        db.scalar(
+            select(func.count(Submission.id)).where(
+                Submission.user_id == user_id,
+                Submission.mode == "public",
+                Submission.created_at >= day_start_utc,
+                Submission.created_at < day_end_utc,
+                Submission.status != "rejected",
+            )
+        )
+        or 0
+    )
+
+
+def ensure_public_submission_quota(db: Session, user_id: int, cfg: dict[str, Any]) -> None:
+    quota = configured_quota_per_day(cfg)
+    today_count = public_submission_count_today(db, user_id)
+    if today_count >= quota:
+        raise HTTPException(status_code=429, detail=f"今日正式提交次数已达上限（{quota} 次）。")
 
 
 def verify_same_origin(request: Request) -> None:
@@ -317,6 +408,54 @@ def score_payload(score: Score) -> dict[str, Any]:
         "predictions_path": score.predictions_path,
         "updated_at": now_iso(score.updated_at),
     }
+
+
+def score_summary_payload(score: Score | None) -> dict[str, Any] | None:
+    if score is None:
+        return None
+    per_class = json.loads(score.per_class_json or "{}")
+    recalls = []
+    for item in per_class.values():
+        if not isinstance(item, dict):
+            continue
+        try:
+            value = float(item.get("recall"))
+        except (TypeError, ValueError):
+            continue
+        recalls.append(value)
+    return {
+        "split": score.split,
+        "macro_f1": score.macro_f1,
+        "accuracy": score.accuracy,
+        "recall": sum(recalls) / len(recalls) if recalls else None,
+    }
+
+
+def set_setting(db: Session, key: str, value: Any) -> None:
+    setting = db.get(Setting, key)
+    text_value = "" if value is None else str(value)
+    if setting is None:
+        setting = Setting(key=key, value=text_value)
+        db.add(setting)
+    else:
+        setting.value = text_value
+
+
+def folder_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    total = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def bytes_mb(value: int) -> float:
+    return round(value / 1024 / 1024, 2)
 
 
 def write_sync_index(db: Session) -> dict[str, Any]:
@@ -442,6 +581,16 @@ def parse_deadline(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def normalize_deadline(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = parse_deadline(raw)
+    if parsed is None:
+        raise HTTPException(status_code=400, detail="截止时间格式无效。请使用 ISO 时间，例如 2026-06-30T23:59:59+08:00。")
+    return parsed.isoformat()
+
+
 def ensure_public_submission_open(cfg: dict[str, Any]) -> None:
     if bool(cfg.get("freeze_leaderboard", False)):
         raise HTTPException(status_code=403, detail="排行榜已锁定，暂不接受正式提交。")
@@ -517,6 +666,8 @@ def ensure_admin_user(db: Session) -> None:
         admin.role = "admin"
         admin.group_name = "TA"
         admin.disabled = False
+        admin.submit_disabled = False
+        admin.leaderboard_hidden = True
         if os.environ.get("ADMIN_RESET_PASSWORD_ON_STARTUP") == "1":
             reset_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or os.environ.get("ADMIN_PASSWORD")
             if not reset_password:
@@ -554,6 +705,10 @@ def ensure_schema() -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN group_name VARCHAR(120) DEFAULT '' NOT NULL"))
         if rows and "disabled" not in column_names:
             conn.execute(text("ALTER TABLE users ADD COLUMN disabled BOOLEAN DEFAULT 0 NOT NULL"))
+        if rows and "submit_disabled" not in column_names:
+            conn.execute(text("ALTER TABLE users ADD COLUMN submit_disabled BOOLEAN DEFAULT 0 NOT NULL"))
+        if rows and "leaderboard_hidden" not in column_names:
+            conn.execute(text("ALTER TABLE users ADD COLUMN leaderboard_hidden BOOLEAN DEFAULT 0 NOT NULL"))
         rows = conn.execute(text("PRAGMA table_info(submissions)")).mappings().all()
         submission_columns = {row["name"] for row in rows}
         if rows and "mode" not in submission_columns:
@@ -570,6 +725,15 @@ def ensure_schema() -> None:
             conn.execute(text("ALTER TABLE submissions ADD COLUMN onnx_opset INTEGER DEFAULT 0 NOT NULL"))
         if rows and "model_metadata_json" not in submission_columns:
             conn.execute(text("ALTER TABLE submissions ADD COLUMN model_metadata_json TEXT DEFAULT '{}' NOT NULL"))
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS settings ("
+                "key VARCHAR(120) PRIMARY KEY, "
+                "value TEXT DEFAULT '' NOT NULL, "
+                "updated_at DATETIME"
+                ")"
+            )
+        )
 
 
 @app.on_event("startup")
@@ -578,6 +742,7 @@ def startup() -> None:
     SUBMISSION_ROOT.mkdir(parents=True, exist_ok=True)
     INDEX_ROOT.mkdir(parents=True, exist_ok=True)
     RESOURCE_ROOT.mkdir(parents=True, exist_ok=True)
+    (STORAGE_ROOT / "runtime").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
     ensure_schema()
     with SessionLocal() as db:
@@ -593,7 +758,7 @@ def health() -> dict[str, Any]:
 def api_config() -> dict[str, Any]:
     cfg = load_config()
     visible = {
-        "quota_per_day": cfg.get("quota_per_day", 2),
+        "quota_per_day": configured_quota_per_day(cfg),
         "max_params": cfg.get("max_params", 50_000_000),
         "max_weight_mb": cfg.get("max_weight_mb", 200),
         "eval_timeout_sec": cfg.get("eval_timeout_sec", 600),
@@ -698,7 +863,7 @@ def leaderboard_rows_payload(db: Session, reveal_private: bool = False) -> list[
     rows = db.scalars(
         select(Submission)
         .join(User)
-        .where(Submission.mode == "public", Submission.status.in_(["passed", "final"]))
+        .where(Submission.mode == "public", Submission.status.in_(["passed", "final"]), User.leaderboard_hidden == False)
         .order_by(Submission.public_score.desc().nullslast(), Submission.created_at.asc())
     ).all()
     best_by_user: dict[int, Submission] = {}
@@ -709,7 +874,26 @@ def leaderboard_rows_payload(db: Session, reveal_private: bool = False) -> list[
         if current is None or (row.public_score or 0) > (current.public_score or 0):
             best_by_user[row.user_id] = row
     ranked = sorted(best_by_user.values(), key=lambda item: item.public_score or 0, reverse=True)
-    return [submission_payload(row, reveal_private=reveal_private) | {"rank": i + 1} for i, row in enumerate(ranked)]
+    ranked_ids = [row.id for row in ranked]
+    scores_by_submission: dict[int, list[Score]] = {}
+    if ranked_ids:
+        scores = db.scalars(select(Score).where(Score.submission_id.in_(ranked_ids))).all()
+        for score in scores:
+            scores_by_submission.setdefault(score.submission_id, []).append(score)
+
+    payload = []
+    for i, row in enumerate(ranked):
+        scores = scores_by_submission.get(row.id, [])
+        primary_score = (
+            next((score for score in scores if score.split == "final"), None)
+            or next((score for score in scores if score.split == "public"), None)
+            or (scores[0] if scores else None)
+        )
+        payload.append(
+            submission_payload(row, reveal_private=reveal_private)
+            | {"rank": i + 1, "leaderboard_metrics": score_summary_payload(primary_score)}
+        )
+    return payload
 
 
 @app.get("/api/submissions/mine")
@@ -722,6 +906,15 @@ def my_submissions(user: User = Depends(current_user), db: Session = Depends(get
 def my_report(submission_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     submission = db.get(Submission, submission_id)
     if not submission or (submission.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status_code=404, detail="提交记录不存在。")
+    rows = db.scalars(select(Score).where(Score.submission_id == submission_id).order_by(Score.split.asc())).all()
+    return {"submission": submission_payload(submission, reveal_private=True), "scores": [score_payload(row) for row in rows]}
+
+
+@app.get("/api/admin/submissions/{submission_id}/report")
+def admin_submission_report(submission_id: int, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    submission = db.get(Submission, submission_id)
+    if not submission:
         raise HTTPException(status_code=404, detail="提交记录不存在。")
     rows = db.scalars(select(Score).where(Score.submission_id == submission_id).order_by(Score.split.asc())).all()
     return {"submission": submission_payload(submission, reveal_private=True), "scores": [score_payload(row) for row in rows]}
@@ -766,6 +959,7 @@ async def update_my_profile(request: Request, user: User = Depends(current_user)
     user.group_name = group_name
     db.commit()
     db.refresh(user)
+    write_sync_index(db)
     return {"user": user_payload(user)}
 
 
@@ -784,22 +978,13 @@ async def create_submission(
         raise HTTPException(status_code=400, detail="未知提交模式。")
     if not package.filename or not package.filename.lower().endswith(".onnx"):
         raise HTTPException(status_code=400, detail="请直接上传单个 .onnx 文件。")
+    if user.submit_disabled:
+        raise HTTPException(status_code=403, detail="你的提交功能已暂停，请联系 TA。")
 
     cfg = load_config()
     if mode == "public":
         ensure_public_submission_open(cfg)
-    quota = int(cfg.get("quota_per_day", 2))
-    today = datetime.now(timezone.utc).date()
-    today_count = db.scalar(
-        select(func.count(Submission.id)).where(
-            Submission.user_id == user.id,
-            Submission.mode == "public",
-            func.date(Submission.created_at) == today.isoformat(),
-            Submission.status != "rejected",
-        )
-    )
-    if mode == "public" and today_count >= quota:
-        raise HTTPException(status_code=429, detail=f"今日提交次数已达上限（{quota} 次）。")
+        ensure_public_submission_quota(db, user.id, cfg)
 
     content = await package.read()
     try:
@@ -832,7 +1017,7 @@ async def create_submission(
     (submit_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     status = "queued"
-    message = "Queued for public evaluation." if mode == "public" else "已加入测试沙箱兼容性检查队列。"
+    message = "已加入正式评测队列。" if mode == "public" else "已加入测试沙箱兼容性检查队列。"
     submission = Submission(
         user_id=user.id,
         filename=Path(package.filename).name,
@@ -898,6 +1083,61 @@ def admin_sync(request: Request, _: User = Depends(admin_user), db: Session = De
     return write_sync_index(db)
 
 
+@app.patch("/api/admin/settings")
+async def admin_update_settings(request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    data = await request.json()
+    allowed = {"final_pick_deadline", "freeze_leaderboard"}
+    for key in data:
+        if key not in allowed:
+            raise HTTPException(status_code=400, detail=f"未知设置项：{key}")
+    if "final_pick_deadline" in data:
+        set_setting(db, "final_pick_deadline", normalize_deadline(data.get("final_pick_deadline")))
+    if "freeze_leaderboard" in data:
+        set_setting(db, "freeze_leaderboard", "true" if bool(data.get("freeze_leaderboard")) else "false")
+    db.commit()
+    return {"config": api_config()}
+
+
+@app.get("/api/admin/dashboard")
+def admin_dashboard(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    statuses = ["queued", "running", "passed", "failed", "rejected", "validated", "final"]
+    queue_counts = {
+        status: int(db.scalar(select(func.count(Submission.id)).where(Submission.status == status)) or 0)
+        for status in statuses
+    }
+    recent = db.scalars(select(Submission).join(User).order_by(Submission.updated_at.desc()).limit(8)).all()
+    recent_failed = db.scalars(
+        select(Submission)
+        .join(User)
+        .where(Submission.status.in_(["failed", "rejected"]))
+        .order_by(Submission.updated_at.desc())
+        .limit(5)
+    ).all()
+    gpu_path = STORAGE_ROOT / "runtime" / "gpu.json"
+    if gpu_path.is_file():
+        try:
+            gpu = json.loads(gpu_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            gpu = {"available": False, "error": "GPU 状态文件无法解析。"}
+    else:
+        gpu = {"available": False, "error": "GPU 状态尚未上报。"}
+    db_path = Path(DATABASE_URL.replace("sqlite:///", "")) if DATABASE_URL.startswith("sqlite:///") else STORAGE_ROOT / "bench.db"
+    storage = {
+        "submissions_mb": bytes_mb(folder_size(SUBMISSION_ROOT)),
+        "results_mb": bytes_mb(folder_size(RESULTS_ROOT)),
+        "database_mb": bytes_mb(db_path.stat().st_size) if db_path.is_file() else 0,
+    }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "gpu": gpu,
+        "queue_counts": queue_counts,
+        "recent": [submission_payload(row, reveal_private=True) for row in recent],
+        "recent_failed": [submission_payload(row, reveal_private=True) for row in recent_failed],
+        "storage": storage,
+    }
+
+
 @app.get("/api/admin/students")
 def admin_students(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     users = db.scalars(select(User).order_by(User.role.asc(), User.group_name.asc(), User.display_name.asc())).all()
@@ -921,6 +1161,32 @@ async def admin_update_disabled(user_id: int, request: Request, _: User = Depend
     user.disabled = bool(data.get("disabled", False))
     db.commit()
     db.refresh(user)
+    write_sync_index(db)
+    return {"user": user_payload(user)}
+
+
+@app.patch("/api/admin/students/{user_id}/controls")
+async def admin_update_student_controls(user_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    data = await request.json()
+    allowed = {"disabled", "submit_disabled", "leaderboard_hidden"}
+    for key in data:
+        if key not in allowed:
+            raise HTTPException(status_code=400, detail=f"未知控制项：{key}")
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在。")
+    if user.role == "admin":
+        raise HTTPException(status_code=400, detail="管理员账号不能在学生控制中修改。")
+    if "disabled" in data:
+        user.disabled = bool(data.get("disabled"))
+    if "submit_disabled" in data:
+        user.submit_disabled = bool(data.get("submit_disabled"))
+    if "leaderboard_hidden" in data:
+        user.leaderboard_hidden = bool(data.get("leaderboard_hidden"))
+    db.commit()
+    db.refresh(user)
+    write_sync_index(db)
     return {"user": user_payload(user)}
 
 
@@ -954,6 +1220,7 @@ async def admin_update_group(user_id: int, request: Request, _: User = Depends(a
     user.group_name = group_name
     db.commit()
     db.refresh(user)
+    write_sync_index(db)
     return {"user": user_payload(user)}
 
 
@@ -973,6 +1240,7 @@ async def admin_bulk_groups(request: Request, _: User = Depends(admin_user), db:
             user.group_name = str(item.get("group_name", "")).strip()
             updated += 1
     db.commit()
+    write_sync_index(db)
     return {"updated": updated}
 
 

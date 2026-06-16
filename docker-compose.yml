@@ -14,6 +14,7 @@ services:
       HOST_BENCH_ROOT: /home/SI100B_26Fall/emotion-bench
       DATABASE_URL: "${DATABASE_URL:-sqlite:////workspace/storage/bench.db}"
       CONFIG_PATH: /workspace/config.yaml
+      FRONTEND_DIST: /workspace/frontend/dist
       SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY in .env}"
       SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-0}"
     volumes:
@@ -45,6 +46,26 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /workspace
     command: ["python", "-m", "worker.runner"]
+    restart: unless-stopped
+
+
+  gpu-monitor:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    image: emotion-bench-web:dev
+    init: true
+    user: "1000:1000"
+    gpus: all
+    environment:
+      BENCH_ROOT: /workspace
+      GPU_MONITOR_INTERVAL_SECONDS: "5"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    volumes:
+      - ./:/workspace
+    working_dir: /workspace
+    command: ["python", "scripts/gpu_monitor.py"]
     restart: unless-stopped
 
 

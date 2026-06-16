@@ -5,5 +5,12 @@ storage
 results
 logs
 data
+_backups
+_tmp
+_work
 __pycache__
 *.pyc
+*.onnx
+*.pth
+*.pt
+*.ckpt

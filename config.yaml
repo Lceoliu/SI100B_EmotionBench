@@ -1,4 +1,4 @@
-quota_per_day: 2
+quota_per_day: 4
 max_params: 50_000_000
 max_weight_mb: 200
 eval_timeout_sec: 600

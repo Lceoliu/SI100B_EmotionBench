@@ -56,7 +56,7 @@ export const pageTitles = {
 };
 
 export const pageCopy = {
-  home: 'SI100B Spring 2026 课程项目评测平台，欢迎提交模型并查看排行榜！',
+  home: 'SI100B Spring 2026 课程项目评测平台。学生可提交 ONNX 模型、查看记录和排行榜。',
   leaderboard: '排行榜分数即最终平台评测分数，按排行榜评测集 Macro-F1 百分制展示。',
   submit: '上传单个 .onnx 文件，平台按 ONNX 输入声明执行固定预处理。',
   dataset: '了解公开小样本、排行榜评测集、ONNX 输入格式和评分口径。',

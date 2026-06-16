@@ -3,7 +3,13 @@ storage/bench.db
 storage/submissions/
 storage/results/
 storage/smoke_*/
+storage/runtime/
+storage/*.db-shm
+storage/*.db-wal
 results/
+logs/
+_backups/
+_work/
 data/**/cache/
 data/**/cache_manifest.json
 data/**/cache/summary.json
@@ -20,6 +26,15 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 
+# Model/training artifacts
+*.onnx
+*.pth
+*.pt
+*.ckpt
+checkpoints/
+wandb/
+runs/
+
 # Python caches
 __pycache__/
 *.py[cod]
@@ -28,6 +43,10 @@ __pycache__/
 # Logs/temp
 *.log
 .DS_Store
+_tmp/
+.venv/
+.vscode/
+.idea/
 
 # Web-downloadable course resources are stored on the server, not versioned here
 storage/resources/

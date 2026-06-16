@@ -272,6 +272,7 @@ def export_onnx(model: torch.nn.Module, output_path: Path, input_size: int, chan
         opset_version=18,
         do_constant_folding=True,
         external_data=False,
+        dynamo=False,
     )
     onnx_model = onnx.load(output_path, load_external_data=False)
     for tensor in onnx_model.graph.initializer:

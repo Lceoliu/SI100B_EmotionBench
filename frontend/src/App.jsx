@@ -14,6 +14,24 @@ import {
   SubmitPanel
 } from './pages.jsx';
 
+const footerLinks = [
+  {
+    href: 'https://github.com/Lceoliu',
+    label: 'GitHub',
+    icon: 'https://cdn.jsdelivr.net/npm/simple-icons@16.23.0/icons/github.svg'
+  },
+  {
+    href: 'https://www.linkedin.com/in/chang-liu-143b303a0/',
+    label: 'LinkedIn',
+    icon: 'https://cdn.jsdelivr.net/npm/simple-icons@16.23.0/icons/linkedin.svg'
+  },
+  {
+    href: 'https://lceoliu.github.io/SP26_SI100B_Tutorial/',
+    label: 'Tutorial',
+    icon: 'https://cdn.jsdelivr.net/npm/lucide-static@1.18.0/icons/book-open.svg'
+  }
+];
+
 function App() {
   const [active, setActive] = useState('home');
   const [user, setUser] = useState(null);
@@ -22,11 +40,13 @@ function App() {
   const [queue, setQueue] = useState([]);
   const [students, setStudents] = useState([]);
   const [invites, setInvites] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
   const [resources, setResources] = useState([]);
   const [group, setGroup] = useState({ group_name: '', mates: [] });
   const [config, setConfig] = useState({});
   const [notice, setNotice] = useState('');
   const [selectedSubmissionId, setSelectedSubmissionId] = useState(null);
+  const [detailOrigin, setDetailOrigin] = useState('runs');
 
   const tabs = useMemo(() => (user?.role === 'admin' ? [...baseTabs, adminTab] : baseTabs), [user]);
 
@@ -77,6 +97,12 @@ function App() {
     setQueue(queuePayload.rows || []);
     setStudents(studentsPayload.rows || []);
     setInvites(invitesPayload.rows || []);
+    try {
+      const dashboardPayload = await api('/api/admin/dashboard');
+      setDashboard(dashboardPayload);
+    } catch {
+      setDashboard(null);
+    }
   }
 
   useEffect(() => {
@@ -91,6 +117,7 @@ function App() {
     loadAdmin(user).catch(() => {
       setQueue([]);
       setStudents([]);
+      setDashboard(null);
     });
   }, [user]);
 
@@ -149,7 +176,7 @@ function App() {
 
   async function toggleDisabled(userId, disabled) {
     try {
-      await api(`/api/admin/students/${userId}/disabled`, {
+      await api(`/api/admin/students/${userId}/controls`, {
         method: 'PATCH',
         body: JSON.stringify({ disabled })
       });
@@ -157,6 +184,37 @@ function App() {
       setNotice(disabled ? '账号已禁用' : '账号已启用');
     } catch (err) {
       setNotice(err.message);
+    }
+  }
+
+  async function updateStudentControls(userId, controls) {
+    try {
+      await api(`/api/admin/students/${userId}/controls`, {
+        method: 'PATCH',
+        body: JSON.stringify(controls)
+      });
+      await loadPublic();
+      await loadAdmin(user);
+      setNotice('学生控制已更新');
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function updateSettings(form) {
+    try {
+      const payload = await api('/api/admin/settings', {
+        method: 'PATCH',
+        body: JSON.stringify(form)
+      });
+      setConfig(payload.config || {});
+      await loadPublic();
+      await loadAdmin(user);
+      setNotice('系统设置已保存');
+      return true;
+    } catch (err) {
+      setNotice(err.message);
+      return false;
     }
   }
 
@@ -244,7 +302,7 @@ function App() {
 
           {notice && <div className="notice">{notice}</div>}
           {active === 'home' && <HomePage resources={resources} />}
-          {active === 'leaderboard' && <Leaderboard rows={leaderboard} admin={user?.role === 'admin'} onDelete={deleteSubmission} />}
+          {active === 'leaderboard' && <Leaderboard rows={leaderboard} user={user} admin={user?.role === 'admin'} onDelete={deleteSubmission} />}
           {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} onOpenGuide={() => setActive('dataset')} />}
           {active === 'dataset' && <DatasetGuide resources={resources} onBack={() => setActive('submit')} />}
           {active === 'runs' && (
@@ -254,6 +312,7 @@ function App() {
               onFinal={markFinal}
               onOpenDetail={(id) => {
                 setSelectedSubmissionId(id);
+                setDetailOrigin('runs');
                 setActive('submissionDetail');
               }}
             />
@@ -261,9 +320,12 @@ function App() {
           {active === 'submissionDetail' && (
             <SubmissionDetail
               submissionId={selectedSubmissionId}
+              adminView={detailOrigin === 'ops' && user?.role === 'admin'}
+              backLabel={detailOrigin === 'ops' ? '返回管理台' : '返回我的记录'}
               onBack={() => {
-                setActive('runs');
-                loadMine(user).catch(() => {});
+                setActive(detailOrigin);
+                if (detailOrigin === 'ops') loadAdmin(user).catch(() => {});
+                else loadMine(user).catch(() => {});
               }}
             />
           )}
@@ -272,12 +334,22 @@ function App() {
               queueRows={queue}
               students={students}
               invites={invites}
+              config={config}
+              dashboard={dashboard}
               onSaveGroup={saveGroup}
               onToggleDisabled={toggleDisabled}
+              onUpdateControls={updateStudentControls}
               onResetPassword={resetPassword}
               onCreateInvite={createInvite}
               onDeleteInvite={deleteInvite}
               onDeleteSubmission={deleteSubmission}
+              onOpenSubmissionDetail={(id) => {
+                setSelectedSubmissionId(id);
+                setDetailOrigin('ops');
+                setActive('submissionDetail');
+              }}
+              onSaveSettings={updateSettings}
+              onRefreshDashboard={() => loadAdmin(user)}
             />
           )}
         </section>
@@ -290,7 +362,8 @@ function App() {
             <dl className="system-list">
               <div><dt>评测队列</dt><dd>{topStatus}</dd></div>
               <div><dt>排行榜</dt><dd>{config.freeze_leaderboard ? '已冻结' : '开放中'}</dd></div>
-              <div><dt>最终提交截止</dt><dd>{config.final_pick_deadline || '未设置'}</dd></div>
+              <div><dt>最终提交截止</dt><dd>{deadlineDisplay(config.final_pick_deadline)}</dd></div>
+              <div><dt>倒计时</dt><dd>{deadlineText(config.final_pick_deadline)}</dd></div>
             </dl>
           </section>
         </aside>
@@ -298,9 +371,38 @@ function App() {
 
       <footer className="statusbar">
         <span>© 2026 Chang LIU · Licensed under Apache-2.0</span>
+        <nav className="footer-links" aria-label="项目链接">
+          {footerLinks.map((link) => (
+            <a key={link.href} href={link.href} target="_blank" rel="noreferrer" aria-label={link.label}>
+              <span className="footer-icon" style={{ '--footer-icon-url': `url("${link.icon}")` }} aria-hidden="true" />
+              <span>{link.label}</span>
+            </a>
+          ))}
+        </nav>
       </footer>
     </div>
   );
+}
+
+function deadlineText(value) {
+  if (!value || String(value).includes('XX')) return '未设置';
+  const end = new Date(value).getTime();
+  if (!Number.isFinite(end)) return '未设置';
+  const diff = end - Date.now();
+  if (diff <= 0) return '已截止';
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
+  if (days > 0) return `还剩 ${days} 天 ${hours} 小时`;
+  if (hours > 0) return `还剩 ${hours} 小时 ${minutes} 分钟`;
+  return `还剩 ${Math.max(1, minutes)} 分钟`;
+}
+
+function deadlineDisplay(value) {
+  if (!value || String(value).includes('XX')) return '未设置';
+  const end = new Date(value);
+  if (!Number.isFinite(end.getTime())) return '未设置';
+  return value;
 }
 
 export default App;
