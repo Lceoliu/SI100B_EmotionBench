@@ -380,7 +380,7 @@ export function GroupPanel({ user, group, onProfileUpdate }) {
   );
 }
 
-export function Leaderboard({ rows, user, admin, onDelete }) {
+export function Leaderboard({ rows, user, admin, onDelete, onExportCsv }) {
   const [expandedId, setExpandedId] = useState(null);
   const columns = [
     { key: 'rank', label: '#', render: (row) => <strong>{row.rank}</strong> },
@@ -438,8 +438,15 @@ export function Leaderboard({ rows, user, admin, onDelete }) {
   return (
     <section className="window">
       <header className="window-bar">
-        <span>最终排行榜</span>
-        <small>按排行榜评测集 Macro-F1 排序，点击记录查看摘要</small>
+        <div className="window-heading">
+          <span>最终排行榜</span>
+          <small>按排行榜评测集 Macro-F1 排序，点击记录查看摘要</small>
+        </div>
+        {admin && (
+          <button className="bar-action" onClick={onExportCsv}>
+            <Download size={14} /> 导出 CSV
+          </button>
+        )}
       </header>
       <DataTable
         columns={[

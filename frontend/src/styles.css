@@ -199,6 +199,18 @@ h1 {
   font-weight: 560;
 }
 
+.window-heading {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.window-heading span {
+  white-space: nowrap;
+}
+
 .bar-action,
 .link-button {
   display: inline-flex;

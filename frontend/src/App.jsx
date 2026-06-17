@@ -270,6 +270,31 @@ function App() {
     }
   }
 
+  async function exportLeaderboardCsv() {
+    try {
+      const response = await fetch('/api/admin/leaderboard.csv', { credentials: 'same-origin' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || `导出失败：${response.status}`);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const filenameMatch = disposition.match(/filename="?([^"]+)"?/i);
+      const filename = filenameMatch?.[1] || `emotion-bench-leaderboard-${new Date().toISOString().slice(0, 10)}.csv`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setNotice('排行榜 CSV 已开始下载');
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -302,7 +327,15 @@ function App() {
 
           {notice && <div className="notice">{notice}</div>}
           {active === 'home' && <HomePage resources={resources} />}
-          {active === 'leaderboard' && <Leaderboard rows={leaderboard} user={user} admin={user?.role === 'admin'} onDelete={deleteSubmission} />}
+          {active === 'leaderboard' && (
+            <Leaderboard
+              rows={leaderboard}
+              user={user}
+              admin={user?.role === 'admin'}
+              onDelete={deleteSubmission}
+              onExportCsv={exportLeaderboardCsv}
+            />
+          )}
           {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} onOpenGuide={() => setActive('dataset')} />}
           {active === 'dataset' && <DatasetGuide resources={resources} onBack={() => setActive('submit')} />}
           {active === 'runs' && (

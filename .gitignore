@@ -4,6 +4,7 @@ storage/submissions/
 storage/results/
 storage/smoke_*/
 storage/runtime/
+storage/backups/
 storage/*.db-shm
 storage/*.db-wal
 results/

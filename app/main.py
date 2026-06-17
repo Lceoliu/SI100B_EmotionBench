@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import csv
+import io
 import json
 import os
 import re
@@ -15,7 +17,7 @@ from urllib.parse import urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from passlib.context import CryptContext
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, event, func, select, text
@@ -857,6 +859,93 @@ def logout(request: Request) -> dict[str, Any]:
 def leaderboard(db: Session = Depends(get_db)) -> dict[str, Any]:
     reveal_private = bool(load_config().get("reveal_private", False))
     return {"rows": leaderboard_rows_payload(db, reveal_private=reveal_private)}
+
+
+def csv_percent(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return f"{float(value) * 100:.2f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def csv_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    text_value = str(value)
+    if text_value[:1] in {"=", "+", "-", "@", "\t", "\r"}:
+        return "'" + text_value
+    return text_value
+
+
+@app.get("/api/admin/leaderboard.csv")
+def admin_leaderboard_csv(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> Response:
+    rows = leaderboard_rows_payload(db, reveal_private=True)
+    output = io.StringIO(newline="")
+    fieldnames = [
+        "rank",
+        "submission_id",
+        "email",
+        "display_name",
+        "group_name",
+        "filename",
+        "status",
+        "score_percent",
+        "macro_f1",
+        "accuracy_percent",
+        "accuracy",
+        "recall_percent",
+        "recall",
+        "input_shape",
+        "input_channels",
+        "input_size",
+        "param_count",
+        "weight_mb",
+        "created_at",
+        "updated_at",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in rows:
+        metrics = row.get("leaderboard_metrics") or {}
+        macro_f1 = metrics.get("macro_f1", row.get("public_score"))
+        accuracy = metrics.get("accuracy")
+        recall = metrics.get("recall")
+        channels = row.get("input_channels")
+        size = row.get("input_size")
+        input_shape = f"NCHW: N x {channels} x {size} x {size}" if channels and size else ""
+        writer.writerow(
+            {
+                "rank": row.get("rank", ""),
+                "submission_id": row.get("id", ""),
+                "email": csv_cell(row.get("email", "")),
+                "display_name": csv_cell(row.get("display_name", "")),
+                "group_name": csv_cell(row.get("group_name", "")),
+                "filename": csv_cell(row.get("filename", "")),
+                "status": csv_cell(row.get("status", "")),
+                "score_percent": csv_percent(macro_f1),
+                "macro_f1": "" if macro_f1 is None else macro_f1,
+                "accuracy_percent": csv_percent(accuracy),
+                "accuracy": "" if accuracy is None else accuracy,
+                "recall_percent": csv_percent(recall),
+                "recall": "" if recall is None else recall,
+                "input_shape": input_shape,
+                "input_channels": "" if channels is None else channels,
+                "input_size": "" if size is None else size,
+                "param_count": row.get("param_count", ""),
+                "weight_mb": row.get("weight_mb", ""),
+                "created_at": row.get("created_at", ""),
+                "updated_at": row.get("updated_at", ""),
+            }
+        )
+    stamp = datetime.now(COURSE_TZ).strftime("%Y%m%d-%H%M%S")
+    filename = f"emotion-bench-leaderboard-{stamp}.csv"
+    return Response(
+        "\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def leaderboard_rows_payload(db: Session, reveal_private: bool = False) -> list[dict[str, Any]]:
