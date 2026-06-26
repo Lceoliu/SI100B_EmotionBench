@@ -92,6 +92,7 @@ class User(Base):
     disabled: Mapped[bool] = mapped_column(Boolean, default=False)
     submit_disabled: Mapped[bool] = mapped_column(Boolean, default=False)
     leaderboard_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     submissions: Mapped[list["Submission"]] = relationship(back_populates="user")
@@ -248,6 +249,7 @@ def user_payload(user: User) -> dict[str, Any]:
         "disabled": bool(user.disabled),
         "submit_disabled": bool(user.submit_disabled),
         "leaderboard_hidden": bool(user.leaderboard_hidden),
+        "quota_reset_at": now_iso(user.quota_reset_at),
     }
 
 
@@ -292,6 +294,12 @@ def configured_quota_per_day(cfg: dict[str, Any]) -> int:
     return max(0, quota)
 
 
+def utc_naive(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def public_submission_day_window(now: datetime | None = None) -> tuple[datetime, datetime]:
     """Return the current Asia/Shanghai day as naive UTC datetimes for SQLite."""
     now_utc = now or datetime.now(timezone.utc)
@@ -306,14 +314,24 @@ def public_submission_day_window(now: datetime | None = None) -> tuple[datetime,
     )
 
 
-def public_submission_count_today(db: Session, user_id: int, now: datetime | None = None) -> int:
+def public_submission_count_today(
+    db: Session,
+    user_id: int,
+    now: datetime | None = None,
+    reset_at: datetime | None = None,
+) -> int:
     day_start_utc, day_end_utc = public_submission_day_window(now)
+    effective_start = day_start_utc
+    if reset_at is not None:
+        reset_at_utc = utc_naive(reset_at)
+        if day_start_utc <= reset_at_utc < day_end_utc:
+            effective_start = max(effective_start, reset_at_utc)
     return int(
         db.scalar(
             select(func.count(Submission.id)).where(
                 Submission.user_id == user_id,
                 Submission.mode == "public",
-                Submission.created_at >= day_start_utc,
+                Submission.created_at >= effective_start,
                 Submission.created_at < day_end_utc,
                 Submission.status != "rejected",
             )
@@ -322,11 +340,25 @@ def public_submission_count_today(db: Session, user_id: int, now: datetime | Non
     )
 
 
-def ensure_public_submission_quota(db: Session, user_id: int, cfg: dict[str, Any]) -> None:
+def ensure_public_submission_quota(db: Session, user: User, cfg: dict[str, Any]) -> None:
     quota = configured_quota_per_day(cfg)
-    today_count = public_submission_count_today(db, user_id)
+    today_count = public_submission_count_today(db, user.id, reset_at=user.quota_reset_at)
     if today_count >= quota:
         raise HTTPException(status_code=429, detail=f"今日正式提交次数已达上限（{quota} 次）。")
+
+
+def admin_student_payload(user: User, db: Session, cfg: dict[str, Any]) -> dict[str, Any]:
+    quota = configured_quota_per_day(cfg)
+    used = public_submission_count_today(db, user.id, reset_at=user.quota_reset_at)
+    payload = user_payload(user)
+    payload.update(
+        {
+            "daily_public_used": used,
+            "daily_public_quota": quota,
+            "daily_public_remaining": max(0, quota - used),
+        }
+    )
+    return payload
 
 
 def verify_same_origin(request: Request) -> None:
@@ -711,6 +743,8 @@ def ensure_schema() -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN submit_disabled BOOLEAN DEFAULT 0 NOT NULL"))
         if rows and "leaderboard_hidden" not in column_names:
             conn.execute(text("ALTER TABLE users ADD COLUMN leaderboard_hidden BOOLEAN DEFAULT 0 NOT NULL"))
+        if rows and "quota_reset_at" not in column_names:
+            conn.execute(text("ALTER TABLE users ADD COLUMN quota_reset_at DATETIME"))
         rows = conn.execute(text("PRAGMA table_info(submissions)")).mappings().all()
         submission_columns = {row["name"] for row in rows}
         if rows and "mode" not in submission_columns:
@@ -1073,7 +1107,7 @@ async def create_submission(
     cfg = load_config()
     if mode == "public":
         ensure_public_submission_open(cfg)
-        ensure_public_submission_quota(db, user.id, cfg)
+        ensure_public_submission_quota(db, user, cfg)
 
     content = await package.read()
     try:
@@ -1176,7 +1210,7 @@ def admin_sync(request: Request, _: User = Depends(admin_user), db: Session = De
 async def admin_update_settings(request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     verify_mutation_request(request)
     data = await request.json()
-    allowed = {"final_pick_deadline", "freeze_leaderboard"}
+    allowed = {"final_pick_deadline", "freeze_leaderboard", "quota_per_day"}
     for key in data:
         if key not in allowed:
             raise HTTPException(status_code=400, detail=f"未知设置项：{key}")
@@ -1184,6 +1218,14 @@ async def admin_update_settings(request: Request, _: User = Depends(admin_user),
         set_setting(db, "final_pick_deadline", normalize_deadline(data.get("final_pick_deadline")))
     if "freeze_leaderboard" in data:
         set_setting(db, "freeze_leaderboard", "true" if bool(data.get("freeze_leaderboard")) else "false")
+    if "quota_per_day" in data:
+        try:
+            quota_per_day = int(data.get("quota_per_day"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="每日正式评测次数必须是整数。") from exc
+        if quota_per_day < 0 or quota_per_day > 100:
+            raise HTTPException(status_code=400, detail="每日正式评测次数必须在 0 到 100 之间。")
+        set_setting(db, "quota_per_day", str(quota_per_day))
     db.commit()
     return {"config": api_config()}
 
@@ -1229,13 +1271,17 @@ def admin_dashboard(_: User = Depends(admin_user), db: Session = Depends(get_db)
 
 @app.get("/api/admin/students")
 def admin_students(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    cfg = load_config()
     users = db.scalars(select(User).order_by(User.role.asc(), User.group_name.asc(), User.display_name.asc())).all()
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in users:
         if item.role != "student":
             continue
-        groups.setdefault(item.group_name or "未分组", []).append(user_payload(item))
-    return {"rows": [user_payload(item) for item in users], "groups": groups}
+        groups.setdefault(item.group_name or "未分组", []).append(admin_student_payload(item, db, cfg))
+    return {
+        "rows": [admin_student_payload(item, db, cfg) if item.role == "student" else user_payload(item) for item in users],
+        "groups": groups,
+    }
 
 
 @app.patch("/api/admin/students/{user_id}/disabled")
@@ -1294,6 +1340,20 @@ async def admin_reset_password(user_id: int, request: Request, _: User = Depends
     user.password_hash = pwd_context.hash(password)
     db.commit()
     return {"ok": True, "user": user_payload(user)}
+
+
+@app.post("/api/admin/students/{user_id}/reset-quota")
+def admin_reset_student_quota(user_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在。")
+    if user.role == "admin":
+        raise HTTPException(status_code=400, detail="管理员账号没有学生提交次数。")
+    user.quota_reset_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user)
+    return {"user": admin_student_payload(user, db, load_config())}
 
 
 @app.patch("/api/admin/students/{user_id}/group")

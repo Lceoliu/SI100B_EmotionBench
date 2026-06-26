@@ -582,7 +582,7 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
         </form>
         <div className="rule-sheet">
           <dl>
-            <div><dt>每日次数</dt><dd>{config.quota_per_day ?? 2}</dd></div>
+            <div><dt>每日正式评测次数</dt><dd>{config.quota_per_day ?? 4}</dd></div>
             <div><dt>最大参数量</dt><dd>{fmtParams(config.max_params)}</dd></div>
             <div><dt>ONNX 上限</dt><dd>{config.max_weight_mb ?? 200} MB</dd></div>
             <div><dt>评测超时</dt><dd>{config.eval_timeout_sec ?? 600}s</dd></div>
@@ -865,12 +865,14 @@ function DashboardPanel({ dashboard, onRefresh }) {
 function SettingsPanel({ config, onSaveSettings }) {
   const [deadline, setDeadline] = useState(dateTimeInputValue(config.final_pick_deadline));
   const [freeze, setFreeze] = useState(Boolean(config.freeze_leaderboard));
+  const [quota, setQuota] = useState(Number(config.quota_per_day ?? 4));
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setDeadline(dateTimeInputValue(config.final_pick_deadline));
     setFreeze(Boolean(config.freeze_leaderboard));
-  }, [config.final_pick_deadline, config.freeze_leaderboard]);
+    setQuota(Number(config.quota_per_day ?? 4));
+  }, [config.final_pick_deadline, config.freeze_leaderboard, config.quota_per_day]);
 
   async function submit(event) {
     event.preventDefault();
@@ -878,7 +880,8 @@ function SettingsPanel({ config, onSaveSettings }) {
     try {
       await onSaveSettings({
         final_pick_deadline: deadlinePayloadValue(deadline),
-        freeze_leaderboard: freeze
+        freeze_leaderboard: freeze,
+        quota_per_day: quota
       });
     } finally {
       setBusy(false);
@@ -896,6 +899,17 @@ function SettingsPanel({ config, onSaveSettings }) {
           最终提交截止时间
           <input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
         </label>
+        <label>
+          每日正式评测次数
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            value={quota}
+            onChange={(event) => setQuota(Math.max(0, Math.min(100, Number(event.target.value) || 0)))}
+          />
+        </label>
         <label className="check-row">
           <input type="checkbox" checked={freeze} onChange={(event) => setFreeze(event.target.checked)} />
           冻结排行榜
@@ -908,7 +922,7 @@ function SettingsPanel({ config, onSaveSettings }) {
   );
 }
 
-function StudentManager({ students, onSaveGroup, onToggleDisabled, onUpdateControls, onResetPassword }) {
+function StudentManager({ students, onSaveGroup, onToggleDisabled, onUpdateControls, onResetPassword, onResetQuota }) {
   const [drafts, setDrafts] = useState({});
   const [passwords, setPasswords] = useState({});
   const [groupCount, setGroupCount] = useState(8);
@@ -958,6 +972,17 @@ function StudentManager({ students, onSaveGroup, onToggleDisabled, onUpdateContr
         <span className={`status ${row.leaderboard_hidden ? 'status-neutral' : 'status-success'}`}>
           {row.leaderboard_hidden ? '已隐藏' : '显示'}
         </span>
+      )
+    },
+    {
+      key: 'daily_quota',
+      label: '今日正式评测',
+      render: (row) => (
+        <div className="quota-cell">
+          <strong>{row.daily_public_used ?? 0} / {row.daily_public_quota ?? '—'}</strong>
+          <span>剩余 {row.daily_public_remaining ?? '—'}</span>
+          {row.quota_reset_at && <span>刷新 {fmtTime(row.quota_reset_at)}</span>}
+        </div>
       )
     },
     {
@@ -1024,6 +1049,9 @@ function StudentManager({ students, onSaveGroup, onToggleDisabled, onUpdateContr
           </button>
           <button className="link-button" onClick={() => onUpdateControls(row.id, { leaderboard_hidden: !row.leaderboard_hidden })}>
             {row.leaderboard_hidden ? '显示榜单' : '隐藏榜单'}
+          </button>
+          <button className="link-button" onClick={() => onResetQuota(row.id)}>
+            <RotateCw size={14} /> 刷新次数
           </button>
         </div>
       )
@@ -1117,6 +1145,7 @@ export function OpsPanel({
   onToggleDisabled,
   onUpdateControls,
   onResetPassword,
+  onResetQuota,
   onCreateInvite,
   onDeleteInvite,
   onDeleteSubmission,
@@ -1171,6 +1200,7 @@ export function OpsPanel({
         onToggleDisabled={onToggleDisabled}
         onUpdateControls={onUpdateControls}
         onResetPassword={onResetPassword}
+        onResetQuota={onResetQuota}
       />
       <InviteManager invites={invites} onCreateInvite={onCreateInvite} onDeleteInvite={onDeleteInvite} />
     </div>

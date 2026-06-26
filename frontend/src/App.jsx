@@ -232,6 +232,19 @@ function App() {
     }
   }
 
+  async function resetQuota(userId) {
+    if (!window.confirm('确认刷新该用户今日正式评测次数？历史提交记录不会删除。')) return false;
+    try {
+      await api(`/api/admin/students/${userId}/reset-quota`, { method: 'POST' });
+      await loadAdmin(user);
+      setNotice('该用户今日正式评测次数已刷新');
+      return true;
+    } catch (err) {
+      setNotice(err.message);
+      return false;
+    }
+  }
+
   async function createInvite(form) {
     try {
       await api('/api/admin/invites', {
@@ -373,6 +386,7 @@ function App() {
               onToggleDisabled={toggleDisabled}
               onUpdateControls={updateStudentControls}
               onResetPassword={resetPassword}
+              onResetQuota={resetQuota}
               onCreateInvite={createInvite}
               onDeleteInvite={deleteInvite}
               onDeleteSubmission={deleteSubmission}
