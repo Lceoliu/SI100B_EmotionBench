@@ -96,3 +96,47 @@ def test_admin_can_change_own_password(admin, make_api):
 def test_change_password_requires_csrf(student):
     response = student.client.post("/api/me/password", json={"current_password": "student-password", "new_password": "new-password-1"})
     assert response.status_code == 403
+
+
+def test_password_change_signs_out_other_sessions(make_api, student):
+    other_device = make_api()
+    assert other_device.login("alice@shanghaitech.edu.cn", "student-password").status_code == 200
+    assert other_device.get("/api/submissions/mine").status_code == 200
+
+    response = student.post("/api/me/password", json={"current_password": "student-password", "new_password": "new-password-1"})
+    assert response.status_code == 200
+
+    # The device that changed the password stays signed in; every other session is revoked.
+    assert student.get("/api/submissions/mine").status_code == 200
+    assert student.get("/api/session").json()["user"]["email"] == "alice@shanghaitech.edu.cn"
+    assert other_device.get("/api/session").json()["user"] is None
+    assert other_device.get("/api/submissions/mine").status_code == 401
+    assert other_device.login("alice@shanghaitech.edu.cn", "new-password-1").status_code == 200
+    assert other_device.get("/api/submissions/mine").status_code == 200
+
+
+def test_admin_password_reset_signs_out_the_student(admin, student):
+    assert admin.post(f"/api/admin/students/{student.user['id']}/reset-password", json={"password": "reset-by-ta-1"}).status_code == 200
+    assert student.get("/api/submissions/mine").status_code == 401
+    assert student.get("/api/session").json()["user"] is None
+
+
+def test_admin_reset_on_startup_signs_out_admin_sessions(monkeypatch, app_module, admin):
+    monkeypatch.setenv("ADMIN_RESET_PASSWORD_ON_STARTUP", "1")
+    monkeypatch.setenv("ADMIN_INITIAL_PASSWORD", "recovered-admin-pw")
+    with app_module.SessionLocal() as db:
+        app_module.ensure_admin_user(db)
+    assert admin.get("/api/admin/queue").status_code == 401
+
+
+def test_session_schema_upgrade_adds_column(app_module, client):
+    from sqlalchemy import text
+
+    from app.db import ensure_schema
+
+    with app_module.engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users DROP COLUMN session_version"))
+    ensure_schema()
+    with app_module.engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
+    assert "session_version" in columns

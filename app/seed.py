@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app import env
 from app.config import set_setting
 from app.models import InviteCode, Setting, Submission, User
-from app.security import pwd_context
+from app.security import pwd_context, revoke_other_sessions
 
 
 def seed_initial_data(db: Session) -> None:
@@ -81,4 +81,5 @@ def ensure_admin_user(db: Session) -> None:
             if len(reset_password) < env.MIN_PASSWORD_LENGTH:
                 raise RuntimeError(f"ADMIN_INITIAL_PASSWORD must be at least {env.MIN_PASSWORD_LENGTH} characters.")
             admin.password_hash = pwd_context.hash(reset_password)
+            revoke_other_sessions(None, admin)
     db.commit()

@@ -17,7 +17,7 @@ from app.leaderboard import leaderboard_csv, write_sync_index
 from app.models import InviteCode, Score, Submission, User
 from app.payloads import invite_payload, score_payload, submission_payload, user_payload
 from app.quota import admin_student_payload, reset_quota_for
-from app.security import admin_user, pwd_context, verify_mutation_request
+from app.security import admin_user, pwd_context, revoke_other_sessions, verify_mutation_request
 from app.submissions import bytes_mb, folder_size, remove_submission_artifacts
 
 router = APIRouter(prefix="/api/admin")
@@ -243,6 +243,7 @@ async def admin_reset_password(user_id: int, request: Request, _: User = Depends
     if user.role == "admin":
         raise HTTPException(status_code=400, detail="管理员密码不在学生管理中重置。")
     user.password_hash = pwd_context.hash(password)
+    revoke_other_sessions(None, user)
     db.commit()
     return {"ok": True, "user": user_payload(user)}
 

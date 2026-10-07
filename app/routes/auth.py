@@ -11,7 +11,16 @@ from app import env
 from app.db import get_db
 from app.models import InviteCode, User
 from app.payloads import user_payload
-from app.security import AUTH_EVENTS, check_rate_limit, client_key, ensure_csrf_token, pwd_context, verify_same_origin
+from app.security import (
+    AUTH_EVENTS,
+    check_rate_limit,
+    client_key,
+    ensure_csrf_token,
+    pwd_context,
+    session_is_current,
+    start_session,
+    verify_same_origin,
+)
 
 router = APIRouter()
 
@@ -22,6 +31,9 @@ EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@shanghaitech\.edu\.cn$")
 def session_info(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     user_id = request.session.get("user_id")
     user = db.get(User, int(user_id)) if user_id else None
+    if user_id and (user is None or user.disabled or not session_is_current(request, user)):
+        request.session.clear()
+        user = None
     return {"user": user_payload(user) if user else None, "csrf_token": ensure_csrf_token(request)}
 
 
@@ -46,7 +58,7 @@ async def register(request: Request, db: Session = Depends(get_db)) -> dict[str,
     db.add(user)
     db.commit()
     db.refresh(user)
-    request.session["user_id"] = user.id
+    start_session(request, user)
     return {"user": user_payload(user), "csrf_token": ensure_csrf_token(request)}
 
 
@@ -62,7 +74,7 @@ async def login(request: Request, db: Session = Depends(get_db)) -> dict[str, An
         raise HTTPException(status_code=401, detail="账号或密码错误。")
     if user.disabled:
         raise HTTPException(status_code=403, detail="账号已被禁用，请联系 TA。")
-    request.session["user_id"] = user.id
+    start_session(request, user)
     return {"user": user_payload(user), "csrf_token": ensure_csrf_token(request)}
 
 

@@ -25,6 +25,8 @@ class User(Base):
     submit_disabled: Mapped[bool] = mapped_column(Boolean, default=False)
     leaderboard_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Stored in the session cookie at login; bumping it signs the user out everywhere else.
+    session_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     submissions: Mapped[list["Submission"]] = relationship(back_populates="user")

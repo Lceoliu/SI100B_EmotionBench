@@ -91,6 +91,22 @@ def verify_mutation_request(request: Request) -> None:
     seen.append((nonce, now))
 
 
+def start_session(request: Request, user: User) -> None:
+    request.session["user_id"] = user.id
+    request.session["session_version"] = user.session_version or 0
+
+
+def revoke_other_sessions(request: Request | None, user: User) -> None:
+    """Invalidate every existing login of `user`; keep `request` signed in if given."""
+    user.session_version = (user.session_version or 0) + 1
+    if request is not None:
+        request.session["session_version"] = user.session_version
+
+
+def session_is_current(request: Request, user: User) -> bool:
+    return int(request.session.get("session_version", 0)) == (user.session_version or 0)
+
+
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     user_id = request.session.get("user_id")
     if not user_id:
@@ -102,6 +118,9 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if user.disabled:
         request.session.clear()
         raise HTTPException(status_code=403, detail="账号已被禁用，请联系 TA。")
+    if not session_is_current(request, user):
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="密码已修改，请重新登录。")
     return user
 
 

@@ -18,7 +18,15 @@ from app.leaderboard import standing_payload, write_sync_index
 from app.models import Score, Submission, User
 from app.payloads import score_payload, submission_payload, user_payload
 from app.quota import ensure_public_submission_open, ensure_public_submission_quota
-from app.security import AUTH_EVENTS, check_rate_limit, client_key, current_user, pwd_context, verify_mutation_request
+from app.security import (
+    AUTH_EVENTS,
+    check_rate_limit,
+    client_key,
+    current_user,
+    pwd_context,
+    revoke_other_sessions,
+    verify_mutation_request,
+)
 from app.submissions import validate_submission_file
 
 router = APIRouter()
@@ -89,6 +97,7 @@ async def change_my_password(request: Request, user: User = Depends(current_user
     if new_password == current_password:
         raise HTTPException(status_code=400, detail="新密码不能与当前密码相同。")
     user.password_hash = pwd_context.hash(new_password)
+    revoke_other_sessions(request, user)
     db.commit()
     return {"ok": True}
 

@@ -52,6 +52,8 @@ def ensure_schema() -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN leaderboard_hidden BOOLEAN DEFAULT 0 NOT NULL"))
         if rows and "quota_reset_at" not in column_names:
             conn.execute(text("ALTER TABLE users ADD COLUMN quota_reset_at DATETIME"))
+        if rows and "session_version" not in column_names:
+            conn.execute(text("ALTER TABLE users ADD COLUMN session_version INTEGER DEFAULT 0 NOT NULL"))
         rows = conn.execute(text("PRAGMA table_info(submissions)")).mappings().all()
         submission_columns = {row["name"] for row in rows}
         if rows and "mode" not in submission_columns:
