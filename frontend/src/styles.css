@@ -256,6 +256,7 @@ td {
 }
 
 th {
+  white-space: nowrap;
   background: #f1f1ed;
   color: var(--ink);
   font-size: 0.76rem;
@@ -962,6 +963,38 @@ select:focus-visible {
   font-size: 1.2rem;
 }
 
+.metric-grid small {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.standing-note {
+  margin: 0;
+  padding: 14px;
+  line-height: 1.55;
+}
+
+.window-bar select {
+  width: auto;
+  max-width: 260px;
+  min-height: 30px;
+}
+
+.cell-message.wide {
+  max-width: 520px;
+}
+
+.cell-message {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--muted);
+}
+
 .class-bars {
   display: grid;
   gap: 9px;
@@ -1194,6 +1227,50 @@ dd {
   white-space: nowrap;
 }
 
+/* Keep table rows one line tall; the table scrolls sideways inside .table-wrap instead. */
+td {
+  white-space: nowrap;
+}
+
+td .inline-actions {
+  flex-wrap: nowrap;
+}
+
+.group-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.group-toolbar label {
+  display: grid;
+  gap: 4px;
+  width: 120px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.group-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.group-pill {
+  padding: 3px 8px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface-low);
+  font-size: 0.8rem;
+}
+
+.muted-pill {
+  color: var(--muted);
+  background: transparent;
+}
+
 .danger-link {
   color: var(--danger);
 }
@@ -1275,6 +1352,14 @@ dd {
 .form-ok {
   color: var(--success);
   background: var(--success-bg);
+}
+
+.form-warning {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  margin: 0 0 12px;
+  color: var(--warning);
+  background: var(--warning-bg);
 }
 
 .statusbar {

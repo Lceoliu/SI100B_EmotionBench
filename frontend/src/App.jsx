@@ -40,27 +40,39 @@ function App() {
   const [queue, setQueue] = useState([]);
   const [students, setStudents] = useState([]);
   const [invites, setInvites] = useState([]);
+  const [auditRows, setAuditRows] = useState([]);
+  const [queueCounts, setQueueCounts] = useState({ queued: 0, running: 0 });
   const [dashboard, setDashboard] = useState(null);
   const [resources, setResources] = useState([]);
-  const [group, setGroup] = useState({ group_name: '', mates: [] });
+  const [group, setGroup] = useState({ group_name: '', mates: [], personal: null, group: null, quota: null });
   const [config, setConfig] = useState({});
   const [notice, setNotice] = useState('');
   const [selectedSubmissionId, setSelectedSubmissionId] = useState(null);
   const [detailOrigin, setDetailOrigin] = useState('runs');
 
   const tabs = useMemo(() => (user?.role === 'admin' ? [...baseTabs, adminTab] : baseTabs), [user]);
+  const course = config.course || {};
+  const courseLabel = [course.name, course.term].filter(Boolean).join(' ');
+  const title = active === 'home' && course.project_title ? course.project_title : pageTitles[active];
+  const copy = active === 'home' && courseLabel ? `${courseLabel} 课程项目评测平台。${pageCopy.home}` : pageCopy[active];
+
+  useEffect(() => {
+    document.title = course.name ? `${course.name} Emotion Bench` : 'Emotion Bench';
+  }, [course.name]);
 
   useEffect(() => {
     if (active === 'ops' && user?.role !== 'admin') setActive('home');
   }, [active, user]);
 
   async function loadPublic() {
-    const [cfg, board, session, resourcePayload] = await Promise.all([
+    const [cfg, board, session, resourcePayload, queuePayload] = await Promise.all([
       api('/api/config'),
       api('/api/leaderboard'),
       api('/api/session'),
-      api('/api/resources')
+      api('/api/resources'),
+      api('/api/queue')
     ]);
+    setQueueCounts(queuePayload);
     setCsrfToken(session.csrf_token);
     setConfig(cfg);
     setLeaderboard(board.rows || []);
@@ -71,12 +83,12 @@ function App() {
   async function loadMine(currentUser = user) {
     if (!currentUser) {
       setMine([]);
-      setGroup({ group_name: '', mates: [] });
+      setGroup({ group_name: '', mates: [], personal: null, group: null, quota: null });
       return;
     }
     const [minePayload, groupPayload] = await Promise.all([
       api('/api/submissions/mine'),
-      currentUser.role === 'student' ? api('/api/me/group') : Promise.resolve({ group_name: '', mates: [] })
+      currentUser.role === 'student' ? api('/api/me/group') : Promise.resolve({ group_name: '', mates: [], personal: null, group: null, quota: null })
     ]);
     setMine(minePayload.rows || []);
     setGroup(groupPayload);
@@ -87,16 +99,19 @@ function App() {
       setQueue([]);
       setStudents([]);
       setInvites([]);
+      setAuditRows([]);
       return;
     }
-    const [queuePayload, studentsPayload, invitesPayload] = await Promise.all([
+    const [queuePayload, studentsPayload, invitesPayload, auditPayload] = await Promise.all([
       api('/api/admin/queue'),
       api('/api/admin/students'),
-      api('/api/admin/invites')
+      api('/api/admin/invites'),
+      api('/api/admin/audit?limit=200')
     ]);
     setQueue(queuePayload.rows || []);
     setStudents(studentsPayload.rows || []);
     setInvites(invitesPayload.rows || []);
+    setAuditRows(auditPayload.rows || []);
     try {
       const dashboardPayload = await api('/api/admin/dashboard');
       setDashboard(dashboardPayload);
@@ -112,7 +127,7 @@ function App() {
   useEffect(() => {
     loadMine(user).catch(() => {
       setMine([]);
-      setGroup({ group_name: '', mates: [] });
+      setGroup({ group_name: '', mates: [], personal: null, group: null, quota: null });
     });
     loadAdmin(user).catch(() => {
       setQueue([]);
@@ -122,9 +137,9 @@ function App() {
   }, [user]);
 
   const topStatus = useMemo(() => {
-    const running = leaderboard.filter((row) => ['queued', 'running'].includes(row.status)).length + mine.filter((row) => ['queued', 'running'].includes(row.status)).length;
-    return running ? `${running} 个任务运行中` : '队列空闲';
-  }, [leaderboard, mine]);
+    const { queued = 0, running = 0 } = queueCounts;
+    return queued || running ? `排队 ${queued} · 运行 ${running}` : '队列空闲';
+  }, [queueCounts]);
 
   async function refreshAll() {
     try {
@@ -132,15 +147,6 @@ function App() {
       await loadMine(user);
       await loadAdmin(user);
       setNotice('已刷新');
-    } catch (err) {
-      setNotice(err.message);
-    }
-  }
-
-  async function markFinal(id) {
-    try {
-      await api(`/api/submissions/${id}/final`, { method: 'POST' });
-      await loadMine(user);
     } catch (err) {
       setNotice(err.message);
     }
@@ -233,11 +239,11 @@ function App() {
   }
 
   async function resetQuota(userId) {
-    if (!window.confirm('确认刷新该用户今日正式评测次数？历史提交记录不会删除。')) return false;
+    if (!window.confirm('确认刷新该学生所在小组今日的正式评测次数？历史提交记录不会删除。')) return false;
     try {
       await api(`/api/admin/students/${userId}/reset-quota`, { method: 'POST' });
       await loadAdmin(user);
-      setNotice('该用户今日正式评测次数已刷新');
+      setNotice('该小组今日正式评测次数已刷新');
       return true;
     } catch (err) {
       setNotice(err.message);
@@ -278,6 +284,29 @@ function App() {
       await loadMine(user);
       await loadAdmin(user);
       setNotice('提交记录已删除');
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function rejudgeSubmission(submissionId) {
+    if (!window.confirm(`确认重新评测提交 #${submissionId}？旧的分数会被清除，评测完成后重新计入排行榜。`)) return;
+    try {
+      await api(`/api/admin/submissions/${submissionId}/rejudge`, { method: 'POST' });
+      await loadPublic();
+      await loadAdmin(user);
+      setNotice(`提交 #${submissionId} 已重新加入评测队列`);
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function rejudgeErrors() {
+    if (!window.confirm('确认把所有“系统错误”的提交重新加入评测队列？')) return;
+    try {
+      const payload = await api('/api/admin/submissions/rejudge-errors', { method: 'POST' });
+      await loadAdmin(user);
+      setNotice(payload.requeued ? `已重新加入 ${payload.requeued} 个系统错误提交` : '没有需要重新评测的系统错误提交');
     } catch (err) {
       setNotice(err.message);
     }
@@ -332,30 +361,32 @@ function App() {
         <section className="content">
           <div className="page-head">
             <div>
-              <h1>{pageTitles[active]}</h1>
-              <p>{pageCopy[active]}</p>
+              <h1>{title}</h1>
+              <p>{copy}</p>
             </div>
             <button className="button secondary" onClick={refreshAll}>刷新</button>
           </div>
 
           {notice && <div className="notice">{notice}</div>}
-          {active === 'home' && <HomePage resources={resources} />}
+          {active === 'home' && <HomePage resources={resources} course={course} lectures={config.lectures || []} />}
           {active === 'leaderboard' && (
             <Leaderboard
               rows={leaderboard}
               user={user}
+              standing={group}
               admin={user?.role === 'admin'}
               onDelete={deleteSubmission}
               onExportCsv={exportLeaderboardCsv}
             />
           )}
-          {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} onOpenGuide={() => setActive('dataset')} />}
+          {active === 'submit' && <SubmitPanel user={user} config={config} standing={group} onCreated={refreshAll} onOpenGuide={() => setActive('dataset')} />}
           {active === 'dataset' && <DatasetGuide resources={resources} onBack={() => setActive('submit')} />}
           {active === 'runs' && (
             <MyRuns
               rows={mine}
+              user={user}
+              standing={group}
               onRefresh={() => loadMine(user)}
-              onFinal={markFinal}
               onOpenDetail={(id) => {
                 setSelectedSubmissionId(id);
                 setDetailOrigin('runs');
@@ -380,6 +411,7 @@ function App() {
               queueRows={queue}
               students={students}
               invites={invites}
+              auditRows={auditRows}
               config={config}
               dashboard={dashboard}
               onSaveGroup={saveGroup}
@@ -390,6 +422,8 @@ function App() {
               onCreateInvite={createInvite}
               onDeleteInvite={deleteInvite}
               onDeleteSubmission={deleteSubmission}
+              onRejudgeSubmission={rejudgeSubmission}
+              onRejudgeErrors={rejudgeErrors}
               onOpenSubmissionDetail={(id) => {
                 setSelectedSubmissionId(id);
                 setDetailOrigin('ops');
@@ -402,14 +436,14 @@ function App() {
         </section>
 
         <aside className="utility">
-          <AuthPanel user={user} onSession={setUser} onAfterLogin={(nextUser) => setActive(nextUser.role === 'admin' ? 'ops' : 'home')} />
+          <AuthPanel user={user} emailDomains={course.email_domains || []} onSession={setUser} onAfterLogin={(nextUser) => setActive(nextUser.role === 'admin' ? 'ops' : 'home')} />
           <GroupPanel user={user} group={group} onProfileUpdate={updateProfile} />
           <section className="utility-block">
             <div className="mini-title">系统状态</div>
             <dl className="system-list">
               <div><dt>评测队列</dt><dd>{topStatus}</dd></div>
               <div><dt>排行榜</dt><dd>{config.freeze_leaderboard ? '已冻结' : '开放中'}</dd></div>
-              <div><dt>最终提交截止</dt><dd>{deadlineDisplay(config.final_pick_deadline)}</dd></div>
+              <div><dt>正式提交截止</dt><dd>{deadlineDisplay(config.final_pick_deadline)}</dd></div>
               <div><dt>倒计时</dt><dd>{deadlineText(config.final_pick_deadline)}</dd></div>
             </dl>
           </section>
@@ -449,7 +483,16 @@ function deadlineDisplay(value) {
   if (!value || String(value).includes('XX')) return '未设置';
   const end = new Date(value);
   if (!Number.isFinite(end.getTime())) return '未设置';
-  return value;
+  const text = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(end);
+  return `${text}（北京时间）`;
 }
 
 export default App;

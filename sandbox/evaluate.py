@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -9,11 +10,18 @@ import onnxruntime as ort
 
 from transforms import IMAGE_SUFFIXES, cache_name, preprocess_image
 
+# The worker treats this exit code as a server-side problem rather than a model failure.
+DATA_ERROR_EXIT = 3
+
+
+class DataError(RuntimeError):
+    """The mounted evaluation data is missing or malformed."""
+
 
 def find_model(sub_dir: Path) -> Path:
     matches = sorted(sub_dir.rglob("*.onnx"))
     if len(matches) != 1:
-        raise RuntimeError(f"expected exactly one .onnx file, found {len(matches)}")
+        raise DataError(f"expected exactly one .onnx file, found {len(matches)}")
     return matches[0]
 
 
@@ -26,14 +34,14 @@ def load_cache(data_dir: Path) -> list[tuple[str, Path]]:
     for item in manifest.get("items", []):
         items.append((str(item["filename"]), data_dir / str(item["array"])))
     if not items:
-        raise RuntimeError(f"cache manifest has no items: {manifest_path}")
+        raise DataError(f"cache manifest has no items: {manifest_path}")
     return items
 
 
 def list_images(data_dir: Path) -> list[tuple[str, Path]]:
     images = sorted(path for path in data_dir.rglob("*") if path.suffix.lower() in IMAGE_SUFFIXES and path.is_file())
     if not images:
-        raise RuntimeError("no images or cache arrays found under /data")
+        raise DataError("no images or cache arrays found under /data")
     return [(path.relative_to(data_dir).as_posix(), path) for path in images]
 
 
@@ -132,4 +140,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except DataError as exc:
+        print(f"data error: {exc}", file=sys.stderr, flush=True)
+        sys.exit(DATA_ERROR_EXIT)

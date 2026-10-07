@@ -1,11 +1,14 @@
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+# Set these in your shell or PowerShell profile, e.g.
+#   $env:EMOTION_BENCH_REMOTE = "user@bench-server"
+#   $env:EMOTION_BENCH_REMOTE_ROOT = "/srv/emotion-bench"
 $Remote = $env:EMOTION_BENCH_REMOTE
-if (-not $Remote) { $Remote = "li@10.19.138.116" }
+if (-not $Remote) { throw "Set EMOTION_BENCH_REMOTE to the SSH target, e.g. user@bench-server." }
 
 $RemoteRoot = $env:EMOTION_BENCH_REMOTE_ROOT
-if (-not $RemoteRoot) { $RemoteRoot = "/home/SI100B_26Fall/emotion-bench" }
+if (-not $RemoteRoot) { throw "Set EMOTION_BENCH_REMOTE_ROOT to the checkout path on the server." }
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path (Join-Path $ScriptRoot "..")

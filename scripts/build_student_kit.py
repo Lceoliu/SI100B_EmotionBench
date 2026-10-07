@@ -8,7 +8,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KIT_ROOT = ROOT / "student_kit" / "si100b-bench-kit"
 OUT_DIR = ROOT / "storage" / "resources"
-OUT_ZIP = OUT_DIR / "si100b-bench-kit-v0.2.2.zip"
+DEFAULT_KIT_FILENAME = "si100b-bench-kit-v0.2.2.zip"
+
+
+def kit_filename() -> str:
+    """Use the filename the web app serves for the `student-kit` resource in config.yaml."""
+    try:
+        import yaml
+    except ImportError:
+        return DEFAULT_KIT_FILENAME
+    config_path = ROOT / "config.yaml"
+    if not config_path.exists():
+        return DEFAULT_KIT_FILENAME
+    cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    for item in cfg.get("resources") or []:
+        if isinstance(item, dict) and item.get("id") == "student-kit" and item.get("filename"):
+            return str(item["filename"])
+    return DEFAULT_KIT_FILENAME
+
+
+OUT_ZIP = OUT_DIR / kit_filename()
 SKIP_DIRS = {"__pycache__", ".venv", "venv", "env", "checkpoints", "demo_outputs", "datasets"}
 SKIP_FILES = {"model.onnx", "local_metrics.json", "local_confusion.png"}
 
