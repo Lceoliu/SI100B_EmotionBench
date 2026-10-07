@@ -8,7 +8,9 @@ def test_queue_positions_follow_worker_order(app_module, make_student, client):
     bob = make_student("Bob", "B组")
     first = alice.submit(make_onnx()).json()["submission"]["id"]
     second = bob.submit(make_onnx()).json()["submission"]["id"]
-    third = alice.submit(make_onnx(), mode="dry-run").json()["submission"]["id"]
+    third_payload = alice.submit(make_onnx(), mode="dry-run").json()["submission"]
+    third = third_payload["id"]
+    assert (third_payload["queue_position"], third_payload["queue_length"]) == (3, 3)
 
     positions = {row["id"]: row["queue_position"] for row in alice.get("/api/submissions/mine").json()["rows"]}
     assert positions == {first: 1, third: 3}

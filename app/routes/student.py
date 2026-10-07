@@ -184,4 +184,4 @@ async def create_submission(
     db.add(submission)
     db.commit()
     db.refresh(submission)
-    return {"submission": submission_payload(submission)}
+    return {"submission": with_queue_position(submission_payload(submission), queue_snapshot(db))}
