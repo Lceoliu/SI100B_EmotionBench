@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import shutil
+import sys
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
@@ -36,16 +37,20 @@ RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", ROOT / "results")).resolve()
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", ROOT / "frontend" / "dist")).resolve()
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{STORAGE_ROOT / 'bench.db'}")
 APP_ENV = os.environ.get("APP_ENV", "dev").lower()
+IS_PRODUCTION = APP_ENV in {"prod", "production"}
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
-    if APP_ENV in {"prod", "production"}:
+    if IS_PRODUCTION:
         raise RuntimeError("SECRET_KEY must be set in production.")
-    SECRET_KEY = "dev-emotion-bench-change-me"
-SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "1" if APP_ENV in {"prod", "production"} else "0") == "1"
-INVITE_CODE = os.environ.get("INVITE_CODE", "SI100B-2026")
+    # Ephemeral key: sessions do not survive a restart, which is fine for local development.
+    SECRET_KEY = secrets.token_urlsafe(32)
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "1" if IS_PRODUCTION else "0") == "1"
+INVITE_CODE = os.environ.get("INVITE_CODE", "").strip()
 DOWNLOAD_LIMIT_PER_MINUTE = int(os.environ.get("DOWNLOAD_LIMIT_PER_MINUTE", "40"))
 AUTH_LIMIT_PER_MINUTE = int(os.environ.get("AUTH_LIMIT_PER_MINUTE", "20"))
 DEFAULT_QUOTA_PER_DAY = 4
+MIN_PASSWORD_LENGTH = 8
+SEEDED_INVITE_SETTING = "seeded_invite_code"
 COURSE_TZ = timezone(timedelta(hours=8))
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -654,20 +659,22 @@ def find_resource(resource_id: str) -> dict[str, str]:
     raise HTTPException(status_code=404, detail="资源不存在。")
 
 
-def seed_demo_data(db: Session) -> None:
+def seed_initial_data(db: Session) -> None:
     ensure_admin_user(db)
-    ensure_default_invite_code(db)
-    normalize_demo_users(db)
+    ensure_initial_invite_code(db)
 
 
-def ensure_default_invite_code(db: Session) -> None:
-    code = INVITE_CODE.strip()
-    if not code:
+def ensure_initial_invite_code(db: Session) -> None:
+    """Create the INVITE_CODE invite once; deleting it in the admin console must stick across restarts."""
+    if not INVITE_CODE:
         return
-    existing = db.scalar(select(InviteCode).where(InviteCode.code == code))
-    if existing is None:
-        db.add(InviteCode(code=code, label="默认邀请码"))
-        db.commit()
+    marker = db.get(Setting, SEEDED_INVITE_SETTING)
+    if marker is not None and marker.value == INVITE_CODE:
+        return
+    if db.scalar(select(InviteCode).where(InviteCode.code == INVITE_CODE)) is None:
+        db.add(InviteCode(code=INVITE_CODE, label="初始邀请码"))
+    set_setting(db, SEEDED_INVITE_SETTING, INVITE_CODE)
+    db.commit()
 
 
 def ensure_admin_user(db: Session) -> None:
@@ -684,14 +691,23 @@ def ensure_admin_user(db: Session) -> None:
     if admin is None:
         initial_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or os.environ.get("ADMIN_PASSWORD")
         if not initial_password:
-            if APP_ENV in {"prod", "production"}:
+            if IS_PRODUCTION:
                 raise RuntimeError("ADMIN_INITIAL_PASSWORD must be set when creating the admin user in production.")
-            initial_password = "wo598053345@"
+            initial_password = secrets.token_urlsafe(12)
+            print(
+                f"[emotion-bench] Created admin account 'admin' with a random password: {initial_password}\n"
+                "[emotion-bench] Set ADMIN_INITIAL_PASSWORD to choose it, and change it after the first login.",
+                file=sys.stderr,
+                flush=True,
+            )
+        elif len(initial_password) < MIN_PASSWORD_LENGTH:
+            raise RuntimeError(f"ADMIN_INITIAL_PASSWORD must be at least {MIN_PASSWORD_LENGTH} characters.")
         admin = User(
             student_id="admin",
             display_name="TA 管理员",
             role="admin",
             group_name="TA",
+            leaderboard_hidden=True,
             password_hash=pwd_context.hash(initial_password),
         )
         db.add(admin)
@@ -706,26 +722,9 @@ def ensure_admin_user(db: Session) -> None:
             reset_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or os.environ.get("ADMIN_PASSWORD")
             if not reset_password:
                 raise RuntimeError("ADMIN_RESET_PASSWORD_ON_STARTUP=1 requires ADMIN_INITIAL_PASSWORD.")
+            if len(reset_password) < MIN_PASSWORD_LENGTH:
+                raise RuntimeError(f"ADMIN_INITIAL_PASSWORD must be at least {MIN_PASSWORD_LENGTH} characters.")
             admin.password_hash = pwd_context.hash(reset_password)
-    db.commit()
-
-
-def normalize_demo_users(db: Session) -> None:
-    mappings = {
-        "2026-001": ("student01@shanghaitech.edu.cn", "A组"),
-        "2026-014": ("student14@shanghaitech.edu.cn", "A组"),
-        "2026-027": ("student27@shanghaitech.edu.cn", "B组"),
-    }
-    for old_id, (email, group_name) in mappings.items():
-        user = db.scalar(select(User).where(User.student_id == old_id))
-        if user is None:
-            continue
-        existing = db.scalar(select(User).where(User.student_id == email))
-        if existing is None:
-            user.student_id = email
-            user.group_name = group_name
-        else:
-            user.group_name = group_name
     db.commit()
 
 
@@ -782,7 +781,7 @@ def startup() -> None:
     Base.metadata.create_all(engine)
     ensure_schema()
     with SessionLocal() as db:
-        seed_demo_data(db)
+        seed_initial_data(db)
 
 
 @app.get("/health")
@@ -854,7 +853,7 @@ async def register(request: Request, db: Session = Depends(get_db)) -> dict[str,
     password = str(data.get("password", ""))
     if not EMAIL_RE.fullmatch(student_id) or len(student_id) > 64:
         raise HTTPException(status_code=400, detail="请使用 @shanghaitech.edu.cn 邮箱注册。")
-    if "@" not in student_id or len(display_name) < 2 or len(password) < 8:
+    if "@" not in student_id or len(display_name) < 2 or len(password) < MIN_PASSWORD_LENGTH:
         raise HTTPException(status_code=400, detail="请填写有效邮箱、姓名，以及至少 8 位密码。")
     if db.scalar(select(User).where(User.student_id == student_id)):
         raise HTTPException(status_code=409, detail="该邮箱已注册。")
@@ -1084,6 +1083,24 @@ async def update_my_profile(request: Request, user: User = Depends(current_user)
     db.refresh(user)
     write_sync_index(db)
     return {"user": user_payload(user)}
+
+
+@app.post("/api/me/password")
+async def change_my_password(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    check_rate_limit(AUTH_EVENTS, client_key(request, "auth"), AUTH_LIMIT_PER_MINUTE)
+    data = await request.json()
+    current_password = str(data.get("current_password", ""))
+    new_password = str(data.get("new_password", ""))
+    if not pwd_context.verify(current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="当前密码不正确。")
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"新密码至少需要 {MIN_PASSWORD_LENGTH} 位。")
+    if new_password == current_password:
+        raise HTTPException(status_code=400, detail="新密码不能与当前密码相同。")
+    user.password_hash = pwd_context.hash(new_password)
+    db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/submissions")
@@ -1330,8 +1347,8 @@ async def admin_reset_password(user_id: int, request: Request, _: User = Depends
     verify_mutation_request(request)
     data = await request.json()
     password = str(data.get("password", ""))
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="新密码至少需要 8 位。")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"新密码至少需要 {MIN_PASSWORD_LENGTH} 位。")
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在。")

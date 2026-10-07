@@ -9,7 +9,7 @@ services:
     ports:
       - "${WEB_PORT:-18080}:8000"
     environment:
-      APP_ENV: "${APP_ENV:-dev}"
+      APP_ENV: "${APP_ENV:-prod}"
       BENCH_ROOT: /workspace
       HOST_BENCH_ROOT: /home/SI100B_26Fall/emotion-bench
       DATABASE_URL: "${DATABASE_URL:-sqlite:////workspace/storage/bench.db}"
@@ -17,6 +17,9 @@ services:
       FRONTEND_DIST: /workspace/frontend/dist
       SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY in .env}"
       SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-0}"
+      ADMIN_INITIAL_PASSWORD: "${ADMIN_INITIAL_PASSWORD:-}"
+      ADMIN_RESET_PASSWORD_ON_STARTUP: "${ADMIN_RESET_PASSWORD_ON_STARTUP:-0}"
+      INVITE_CODE: "${INVITE_CODE:-}"
     volumes:
       - ./:/workspace
     working_dir: /workspace

@@ -289,6 +289,7 @@ export function AuthPanel({ user, onSession, onAfterLogin }) {
           <strong>{user.display_name}</strong>
           <span>{user.email} · {user.role === 'admin' ? '管理员' : '学生'}</span>
         </div>
+        <ChangePasswordForm />
         <button className="button secondary full" onClick={logout}>
           <LogOut size={16} /> 退出登录
         </button>
@@ -335,6 +336,74 @@ export function AuthPanel({ user, onSession, onAfterLogin }) {
         </button>
       </form>
     </section>
+  );
+}
+
+function ChangePasswordForm() {
+  const emptyForm = { current_password: '', new_password: '', confirm_password: '' };
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState(emptyForm);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    setDone(false);
+    if (form.new_password !== form.confirm_password) {
+      setError('两次输入的新密码不一致。');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api('/api/me/password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: form.current_password, new_password: form.new_password })
+      });
+      setForm(emptyForm);
+      setDone(true);
+      setOpen(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <>
+        {done && <p className="form-ok">密码已修改。</p>}
+        <button className="button secondary full" onClick={() => { setOpen(true); setDone(false); }}>
+          <KeyRound size={16} /> 修改密码
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <form className="stack" onSubmit={submit}>
+      <label>
+        当前密码
+        <input type="password" autoComplete="current-password" value={form.current_password} onChange={(e) => setForm({ ...form, current_password: e.target.value })} />
+      </label>
+      <label>
+        新密码（至少 8 位）
+        <input type="password" autoComplete="new-password" value={form.new_password} onChange={(e) => setForm({ ...form, new_password: e.target.value })} />
+      </label>
+      <label>
+        确认新密码
+        <input type="password" autoComplete="new-password" value={form.confirm_password} onChange={(e) => setForm({ ...form, confirm_password: e.target.value })} />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <button className="button primary full" disabled={busy}>
+        <KeyRound size={16} /> {busy ? '处理中' : '保存新密码'}
+      </button>
+      <button type="button" className="button secondary full" onClick={() => { setOpen(false); setError(''); setForm(emptyForm); }}>
+        取消
+      </button>
+    </form>
   );
 }
 
