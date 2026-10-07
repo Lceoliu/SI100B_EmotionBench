@@ -29,7 +29,7 @@ TEST_CONFIG.write_text(
     encoding="utf-8",
 )
 
-# app.main reads its paths and secrets at import time, so the environment must be
+# app.env reads its paths and secrets at import time, so the environment must be
 # in place before any test module imports it.
 os.environ.update(
     {
@@ -144,14 +144,37 @@ def make_onnx(
 
 @pytest.fixture
 def app_module():
-    from app import main
+    """Reset all persistent state and expose the backend modules under one namespace."""
+    from types import SimpleNamespace
 
-    main.Base.metadata.drop_all(main.engine)
-    for bucket in (main.DOWNLOAD_EVENTS, main.AUTH_EVENTS, main.MUTATION_NONCES):
+    from sqlalchemy import func, select
+
+    from app import config, db, env, main, models, security, seed
+
+    db.Base.metadata.drop_all(db.engine)
+    for bucket in (security.DOWNLOAD_EVENTS, security.AUTH_EVENTS, security.MUTATION_NONCES):
         bucket.clear()
-    for path in (main.SUBMISSION_ROOT, main.INDEX_ROOT, main.RESULTS_ROOT, TEST_ROOT / "data", TEST_ROOT / "logs"):
+    for path in (env.SUBMISSION_ROOT, env.INDEX_ROOT, env.RESULTS_ROOT, TEST_ROOT / "data", TEST_ROOT / "logs"):
         shutil.rmtree(path, ignore_errors=True)
-    return main
+    return SimpleNamespace(
+        app=main.app,
+        env=env,
+        SessionLocal=db.SessionLocal,
+        Base=db.Base,
+        engine=db.engine,
+        User=models.User,
+        Submission=models.Submission,
+        Score=models.Score,
+        InviteCode=models.InviteCode,
+        set_setting=config.set_setting,
+        ensure_admin_user=seed.ensure_admin_user,
+        seed_initial_data=seed.seed_initial_data,
+        RequestSizeLimitMiddleware=security.RequestSizeLimitMiddleware,
+        AUTH_LIMIT_PER_MINUTE=env.AUTH_LIMIT_PER_MINUTE,
+        SUBMISSION_ROOT=env.SUBMISSION_ROOT,
+        select=select,
+        func=func,
+    )
 
 
 @pytest.fixture

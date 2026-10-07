@@ -14,7 +14,9 @@ import yaml
 from docker.types import DeviceRequest
 from sqlalchemy import select, text
 
-from app.main import Base, Score, SessionLocal, Submission, engine, write_sync_index
+from app.db import Base, SessionLocal, engine
+from app.leaderboard import write_sync_index
+from app.models import Score, Submission
 from worker.scoring import score_predictions, write_confusion_matrix_png
 
 

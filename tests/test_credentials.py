@@ -28,7 +28,7 @@ def test_admin_gets_random_password_when_none_configured(monkeypatch, capsys, ap
 
 def test_admin_password_is_required_in_production(monkeypatch, app_module):
     fresh_database(app_module)
-    monkeypatch.setattr(app_module, "IS_PRODUCTION", True)
+    monkeypatch.setattr(app_module.env, "IS_PRODUCTION", True)
     monkeypatch.delenv("ADMIN_INITIAL_PASSWORD", raising=False)
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     with app_module.SessionLocal() as db, pytest.raises(RuntimeError, match="ADMIN_INITIAL_PASSWORD"):
@@ -61,7 +61,7 @@ def test_deleted_initial_invite_stays_deleted_after_restart(app_module, admin, m
 
 
 def test_changed_invite_code_is_seeded_once(monkeypatch, app_module, admin):
-    monkeypatch.setattr(app_module, "INVITE_CODE", "NEXT-TERM")
+    monkeypatch.setattr(app_module.env, "INVITE_CODE", "NEXT-TERM")
     with app_module.SessionLocal() as db:
         app_module.seed_initial_data(db)
         app_module.seed_initial_data(db)
@@ -71,7 +71,7 @@ def test_changed_invite_code_is_seeded_once(monkeypatch, app_module, admin):
 
 def test_no_invite_code_is_created_without_configuration(monkeypatch, app_module):
     fresh_database(app_module)
-    monkeypatch.setattr(app_module, "INVITE_CODE", "")
+    monkeypatch.setattr(app_module.env, "INVITE_CODE", "")
     with app_module.SessionLocal() as db:
         app_module.seed_initial_data(db)
         assert db.scalar(app_module.select(app_module.func.count(app_module.InviteCode.id))) == 0
