@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app import env
 from app.config import load_config
 from app.db import get_db
-from app.leaderboard import write_sync_index
+from app.leaderboard import standing_payload, write_sync_index
 from app.models import Score, Submission, User
 from app.payloads import score_payload, submission_payload, user_payload
 from app.quota import ensure_public_submission_open, ensure_public_submission_quota
@@ -27,7 +27,7 @@ router = APIRouter()
 @router.get("/api/submissions/mine")
 def my_submissions(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(Submission).where(Submission.user_id == user.id).order_by(Submission.created_at.desc())).all()
-    return {"rows": [submission_payload(row, reveal_private=True) for row in rows]}
+    return {"rows": [submission_payload(row) for row in rows]}
 
 
 @router.get("/api/me/report/{submission_id}")
@@ -36,7 +36,7 @@ def my_report(submission_id: int, user: User = Depends(current_user), db: Sessio
     if not submission or (submission.user_id != user.id and user.role != "admin"):
         raise HTTPException(status_code=404, detail="提交记录不存在。")
     rows = db.scalars(select(Score).where(Score.submission_id == submission_id).order_by(Score.split.asc())).all()
-    return {"submission": submission_payload(submission, reveal_private=True), "scores": [score_payload(row) for row in rows]}
+    return {"submission": submission_payload(submission), "scores": [score_payload(row) for row in rows]}
 
 
 @router.get("/api/me/report/{submission_id}/confusion/{split}")
@@ -54,14 +54,7 @@ def my_confusion_matrix(submission_id: int, split: str, user: User = Depends(cur
 
 @router.get("/api/me/group")
 def my_group(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    if not user.group_name:
-        return {"group_name": "", "mates": []}
-    mates = db.scalars(
-        select(User)
-        .where(User.group_name == user.group_name, User.role == "student")
-        .order_by(User.display_name.asc())
-    ).all()
-    return {"group_name": user.group_name, "mates": [user_payload(mate) for mate in mates]}
+    return standing_payload(db, user)
 
 
 @router.patch("/api/me/profile")
@@ -174,21 +167,4 @@ async def create_submission(
     db.add(submission)
     db.commit()
     db.refresh(submission)
-    return {"submission": submission_payload(submission, reveal_private=True)}
-
-
-@router.post("/api/submissions/{submission_id}/final")
-def mark_final(submission_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    verify_mutation_request(request)
-    ensure_public_submission_open(load_config())
-    submission = db.get(Submission, submission_id)
-    if not submission or submission.user_id != user.id:
-        raise HTTPException(status_code=404, detail="提交记录不存在。")
-    if submission.status not in {"passed", "final"}:
-        raise HTTPException(status_code=400, detail="只有已通过的提交可以设为最终提交。")
-    db.query(Submission).filter(Submission.user_id == user.id).update({Submission.final_pick: False})
-    submission.final_pick = True
-    submission.status = "final"
-    db.commit()
-    db.refresh(submission)
-    return {"submission": submission_payload(submission, reveal_private=True)}
+    return {"submission": submission_payload(submission)}

@@ -68,6 +68,9 @@ def ensure_schema() -> None:
             conn.execute(text("ALTER TABLE submissions ADD COLUMN onnx_opset INTEGER DEFAULT 0 NOT NULL"))
         if rows and "model_metadata_json" not in submission_columns:
             conn.execute(text("ALTER TABLE submissions ADD COLUMN model_metadata_json TEXT DEFAULT '{}' NOT NULL"))
+        if rows:
+            # The final-pick feature was removed; its status no longer means anything special.
+            conn.execute(text("UPDATE submissions SET status = 'passed' WHERE status = 'final'"))
         conn.execute(
             text(
                 "CREATE TABLE IF NOT EXISTS settings ("

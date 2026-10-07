@@ -66,6 +66,8 @@ class Submission(Base):
     param_count: Mapped[int] = mapped_column(Integer, default=0)
     weight_mb: Mapped[float] = mapped_column(Float, default=0.0)
     public_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Legacy columns from the removed private split and final-pick feature. They stay mapped
+    # because existing databases declare final_pick NOT NULL without a server default.
     private_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     realworld_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_pick: Mapped[bool] = mapped_column(Boolean, default=False)

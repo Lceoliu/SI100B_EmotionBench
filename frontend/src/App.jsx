@@ -42,7 +42,7 @@ function App() {
   const [invites, setInvites] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [resources, setResources] = useState([]);
-  const [group, setGroup] = useState({ group_name: '', mates: [] });
+  const [group, setGroup] = useState({ group_name: '', mates: [], personal: null, group: null, quota: null });
   const [config, setConfig] = useState({});
   const [notice, setNotice] = useState('');
   const [selectedSubmissionId, setSelectedSubmissionId] = useState(null);
@@ -71,12 +71,12 @@ function App() {
   async function loadMine(currentUser = user) {
     if (!currentUser) {
       setMine([]);
-      setGroup({ group_name: '', mates: [] });
+      setGroup({ group_name: '', mates: [], personal: null, group: null, quota: null });
       return;
     }
     const [minePayload, groupPayload] = await Promise.all([
       api('/api/submissions/mine'),
-      currentUser.role === 'student' ? api('/api/me/group') : Promise.resolve({ group_name: '', mates: [] })
+      currentUser.role === 'student' ? api('/api/me/group') : Promise.resolve({ group_name: '', mates: [], personal: null, group: null, quota: null })
     ]);
     setMine(minePayload.rows || []);
     setGroup(groupPayload);
@@ -112,7 +112,7 @@ function App() {
   useEffect(() => {
     loadMine(user).catch(() => {
       setMine([]);
-      setGroup({ group_name: '', mates: [] });
+      setGroup({ group_name: '', mates: [], personal: null, group: null, quota: null });
     });
     loadAdmin(user).catch(() => {
       setQueue([]);
@@ -132,15 +132,6 @@ function App() {
       await loadMine(user);
       await loadAdmin(user);
       setNotice('已刷新');
-    } catch (err) {
-      setNotice(err.message);
-    }
-  }
-
-  async function markFinal(id) {
-    try {
-      await api(`/api/submissions/${id}/final`, { method: 'POST' });
-      await loadMine(user);
     } catch (err) {
       setNotice(err.message);
     }
@@ -233,11 +224,11 @@ function App() {
   }
 
   async function resetQuota(userId) {
-    if (!window.confirm('确认刷新该用户今日正式评测次数？历史提交记录不会删除。')) return false;
+    if (!window.confirm('确认刷新该学生所在小组今日的正式评测次数？历史提交记录不会删除。')) return false;
     try {
       await api(`/api/admin/students/${userId}/reset-quota`, { method: 'POST' });
       await loadAdmin(user);
-      setNotice('该用户今日正式评测次数已刷新');
+      setNotice('该小组今日正式评测次数已刷新');
       return true;
     } catch (err) {
       setNotice(err.message);
@@ -278,6 +269,29 @@ function App() {
       await loadMine(user);
       await loadAdmin(user);
       setNotice('提交记录已删除');
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function rejudgeSubmission(submissionId) {
+    if (!window.confirm(`确认重新评测提交 #${submissionId}？旧的分数会被清除，评测完成后重新计入排行榜。`)) return;
+    try {
+      await api(`/api/admin/submissions/${submissionId}/rejudge`, { method: 'POST' });
+      await loadPublic();
+      await loadAdmin(user);
+      setNotice(`提交 #${submissionId} 已重新加入评测队列`);
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function rejudgeErrors() {
+    if (!window.confirm('确认把所有“系统错误”的提交重新加入评测队列？')) return;
+    try {
+      const payload = await api('/api/admin/submissions/rejudge-errors', { method: 'POST' });
+      await loadAdmin(user);
+      setNotice(payload.requeued ? `已重新加入 ${payload.requeued} 个系统错误提交` : '没有需要重新评测的系统错误提交');
     } catch (err) {
       setNotice(err.message);
     }
@@ -344,18 +358,20 @@ function App() {
             <Leaderboard
               rows={leaderboard}
               user={user}
+              standing={group}
               admin={user?.role === 'admin'}
               onDelete={deleteSubmission}
               onExportCsv={exportLeaderboardCsv}
             />
           )}
-          {active === 'submit' && <SubmitPanel user={user} config={config} onCreated={refreshAll} onOpenGuide={() => setActive('dataset')} />}
+          {active === 'submit' && <SubmitPanel user={user} config={config} standing={group} onCreated={refreshAll} onOpenGuide={() => setActive('dataset')} />}
           {active === 'dataset' && <DatasetGuide resources={resources} onBack={() => setActive('submit')} />}
           {active === 'runs' && (
             <MyRuns
               rows={mine}
+              user={user}
+              standing={group}
               onRefresh={() => loadMine(user)}
-              onFinal={markFinal}
               onOpenDetail={(id) => {
                 setSelectedSubmissionId(id);
                 setDetailOrigin('runs');
@@ -390,6 +406,8 @@ function App() {
               onCreateInvite={createInvite}
               onDeleteInvite={deleteInvite}
               onDeleteSubmission={deleteSubmission}
+              onRejudgeSubmission={rejudgeSubmission}
+              onRejudgeErrors={rejudgeErrors}
               onOpenSubmissionDetail={(id) => {
                 setSelectedSubmissionId(id);
                 setDetailOrigin('ops');
@@ -409,7 +427,7 @@ function App() {
             <dl className="system-list">
               <div><dt>评测队列</dt><dd>{topStatus}</dd></div>
               <div><dt>排行榜</dt><dd>{config.freeze_leaderboard ? '已冻结' : '开放中'}</dd></div>
-              <div><dt>最终提交截止</dt><dd>{deadlineDisplay(config.final_pick_deadline)}</dd></div>
+              <div><dt>正式提交截止</dt><dd>{deadlineDisplay(config.final_pick_deadline)}</dd></div>
               <div><dt>倒计时</dt><dd>{deadlineText(config.final_pick_deadline)}</dd></div>
             </dl>
           </section>

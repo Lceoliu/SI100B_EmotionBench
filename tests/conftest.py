@@ -99,6 +99,12 @@ class ApiClient:
             self.user = response.json()["user"]
         return response
 
+    def set_group(self, group_name: str):
+        response = self.patch("/api/me/profile", json={"display_name": self.user["display_name"], "group_name": group_name})
+        assert response.status_code == 200, response.text
+        self.user = response.json()["user"]
+        return response
+
     def submit(self, model_bytes: bytes, *, mode: str = "public", input_size: int = 48, input_channels: int = 1, filename: str = "model.onnx"):
         return self.post(
             "/api/submissions",
@@ -207,4 +213,31 @@ def admin(make_api) -> ApiClient:
 def student(make_api) -> ApiClient:
     api = make_api()
     assert api.register("alice@shanghaitech.edu.cn", display_name="Alice").status_code == 200
+    api.set_group("A组")
     return api
+
+
+@pytest.fixture
+def make_student(make_api):
+    def factory(name: str, group_name: str = "") -> ApiClient:
+        api = make_api()
+        assert api.register(f"{name.lower()}@shanghaitech.edu.cn", display_name=name).status_code == 200
+        if group_name:
+            api.set_group(group_name)
+        return api
+
+    return factory
+
+
+def mark_passed(app_module, submission_id: int, score: float) -> None:
+    with app_module.SessionLocal() as db:
+        submission = db.get(app_module.Submission, submission_id)
+        submission.status = "passed"
+        submission.public_score = score
+        db.commit()
+
+
+def set_status(app_module, submission_id: int, status: str) -> None:
+    with app_module.SessionLocal() as db:
+        db.get(app_module.Submission, submission_id).status = status
+        db.commit()

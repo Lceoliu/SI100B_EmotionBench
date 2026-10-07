@@ -15,7 +15,7 @@ from app.db import engine
 from app.models import Setting
 from app.onnx_validation import ALLOWED_CHANNELS, ALLOWED_INPUT_SIZES
 
-BOOLEAN_SETTINGS = {"freeze_leaderboard", "reveal_private", "reveal_realworld"}
+BOOLEAN_SETTINGS = {"freeze_leaderboard"}
 
 
 def load_file_config() -> dict[str, Any]:
@@ -101,7 +101,5 @@ def public_config_payload() -> dict[str, Any]:
             "rgb": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
         },
         "freeze_leaderboard": bool(cfg.get("freeze_leaderboard", False)),
-        "reveal_private": bool(cfg.get("reveal_private", False)),
-        "reveal_realworld": bool(cfg.get("reveal_realworld", False)),
         "final_pick_deadline": cfg.get("final_pick_deadline"),
     }

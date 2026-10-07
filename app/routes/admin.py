@@ -16,7 +16,7 @@ from app.db import get_db
 from app.leaderboard import leaderboard_csv, write_sync_index
 from app.models import InviteCode, Score, Submission, User
 from app.payloads import invite_payload, score_payload, submission_payload, user_payload
-from app.quota import admin_student_payload
+from app.quota import admin_student_payload, reset_quota_for
 from app.security import admin_user, pwd_context, verify_mutation_request
 from app.submissions import bytes_mb, folder_size, remove_submission_artifacts
 
@@ -40,13 +40,13 @@ def admin_submission_report(submission_id: int, _: User = Depends(admin_user), d
     if not submission:
         raise HTTPException(status_code=404, detail="提交记录不存在。")
     rows = db.scalars(select(Score).where(Score.submission_id == submission_id).order_by(Score.split.asc())).all()
-    return {"submission": submission_payload(submission, reveal_private=True), "scores": [score_payload(row) for row in rows]}
+    return {"submission": submission_payload(submission), "scores": [score_payload(row) for row in rows]}
 
 
 @router.get("/queue")
 def admin_queue(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(Submission).join(User).order_by(Submission.created_at.desc()).limit(100)).all()
-    return {"rows": [submission_payload(row, reveal_private=True) for row in rows]}
+    return {"rows": [submission_payload(row) for row in rows]}
 
 
 @router.delete("/submissions/{submission_id}")
@@ -61,6 +61,48 @@ def admin_delete_submission(submission_id: int, request: Request, _: User = Depe
     db.commit()
     write_sync_index(db)
     return {"ok": True}
+
+
+REJUDGE_STATUSES = {"passed", "failed", "error", "validated"}
+
+
+def requeue_submission(db: Session, submission: Submission) -> None:
+    db.query(Score).filter(Score.submission_id == submission.id).delete()
+    submission.public_score = None
+    submission.status = "queued"
+    submission.message = "TA 已重新加入评测队列。"
+
+
+def submission_package_exists(submission: Submission) -> bool:
+    return bool(submission.package_path) and Path(submission.package_path).is_file()
+
+
+@router.post("/submissions/{submission_id}/rejudge")
+def admin_rejudge_submission(submission_id: int, request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    submission = db.get(Submission, submission_id)
+    if not submission:
+        raise HTTPException(status_code=404, detail="提交记录不存在。")
+    if submission.status not in REJUDGE_STATUSES:
+        raise HTTPException(status_code=400, detail="只有已完成、失败或系统错误的提交可以重新评测。")
+    if not submission_package_exists(submission):
+        raise HTTPException(status_code=400, detail="模型文件已不存在，无法重新评测。")
+    requeue_submission(db, submission)
+    db.commit()
+    write_sync_index(db)
+    return {"submission": submission_payload(submission)}
+
+
+@router.post("/submissions/rejudge-errors")
+def admin_rejudge_errors(request: Request, _: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    verify_mutation_request(request)
+    rows = [row for row in db.scalars(select(Submission).where(Submission.status == "error")).all() if submission_package_exists(row)]
+    for row in rows:
+        requeue_submission(db, row)
+    db.commit()
+    if rows:
+        write_sync_index(db)
+    return {"requeued": len(rows), "ids": [row.id for row in rows]}
 
 
 @router.post("/sync")
@@ -95,7 +137,7 @@ async def admin_update_settings(request: Request, _: User = Depends(admin_user),
 
 @router.get("/dashboard")
 def admin_dashboard(_: User = Depends(admin_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    statuses = ["queued", "running", "passed", "failed", "rejected", "validated", "final"]
+    statuses = ["queued", "running", "passed", "failed", "error", "rejected", "validated"]
     queue_counts = {
         status: int(db.scalar(select(func.count(Submission.id)).where(Submission.status == status)) or 0)
         for status in statuses
@@ -104,7 +146,7 @@ def admin_dashboard(_: User = Depends(admin_user), db: Session = Depends(get_db)
     recent_failed = db.scalars(
         select(Submission)
         .join(User)
-        .where(Submission.status.in_(["failed", "rejected"]))
+        .where(Submission.status.in_(["failed", "error", "rejected"]))
         .order_by(Submission.updated_at.desc())
         .limit(5)
     ).all()
@@ -126,8 +168,8 @@ def admin_dashboard(_: User = Depends(admin_user), db: Session = Depends(get_db)
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "gpu": gpu,
         "queue_counts": queue_counts,
-        "recent": [submission_payload(row, reveal_private=True) for row in recent],
-        "recent_failed": [submission_payload(row, reveal_private=True) for row in recent_failed],
+        "recent": [submission_payload(row) for row in recent],
+        "recent_failed": [submission_payload(row) for row in recent_failed],
         "storage": storage,
     }
 
@@ -213,10 +255,10 @@ def admin_reset_student_quota(user_id: int, request: Request, _: User = Depends(
         raise HTTPException(status_code=404, detail="用户不存在。")
     if user.role == "admin":
         raise HTTPException(status_code=400, detail="管理员账号没有学生提交次数。")
-    user.quota_reset_at = datetime.now(timezone.utc)
+    members = reset_quota_for(db, user)
     db.commit()
     db.refresh(user)
-    return {"user": admin_student_payload(user, db, load_config())}
+    return {"user": admin_student_payload(user, db, load_config()), "reset_members": len(members)}
 
 
 @router.patch("/students/{user_id}/group")

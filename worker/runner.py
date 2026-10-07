@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import docker
-from docker.errors import NotFound
+import requests
 import yaml
+from docker.errors import NotFound
 from docker.types import DeviceRequest
 from sqlalchemy import select, text
 
@@ -21,6 +22,16 @@ from worker.scoring import score_predictions, write_confusion_matrix_png
 
 
 CLASS_NAMES = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
+# sandbox/evaluate.py exits with this code when the evaluation data, not the model, is at fault.
+SANDBOX_DATA_ERROR_EXIT = 3
+
+
+class ModelFailure(Exception):
+    """The submitted model itself failed in the sandbox (crash, bad output, timeout, OOM).
+
+    Anything else that goes wrong while evaluating is a system error: it is reported as
+    status "error", does not use up the group's daily quota, and TAs can re-run it.
+    """
 
 
 ROOT = Path(os.environ.get("BENCH_ROOT", "/workspace")).resolve()
@@ -184,11 +195,18 @@ def run_eval_container(package_dir: Path, images_dir: Path, out_dir: Path, timeo
         device_requests=device_requests,
     )
     try:
-        result = container.wait(timeout=timeout_sec)
+        try:
+            result = container.wait(timeout=timeout_sec)
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as exc:
+            if isinstance(exc, requests.exceptions.ReadTimeout) or "timed out" in str(exc).lower():
+                raise ModelFailure(f"评测超时：模型在 {timeout_sec} 秒内没有完成推理。") from exc
+            raise
         logs = container.logs(stdout=True, stderr=True)
         status_code = result.get("StatusCode", 1)
+        if status_code == SANDBOX_DATA_ERROR_EXIT:
+            raise RuntimeError("评测数据异常：" + logs.decode("utf-8", errors="replace")[-2000:])
         if status_code != 0:
-            raise RuntimeError(logs.decode("utf-8", errors="replace")[-4000:])
+            raise ModelFailure(logs.decode("utf-8", errors="replace")[-4000:])
         return logs
     except Exception:
         try:
@@ -279,11 +297,11 @@ def evaluate_submission(submission_id: int) -> None:
         write_sync_index(db)
 
 
-def mark_failed(submission_id: int, message: str) -> None:
+def mark_finished_with(submission_id: int, status: str, message: str) -> None:
     with SessionLocal() as db:
         submission = db.get(Submission, submission_id)
         if submission:
-            submission.status = "failed"
+            submission.status = status
             submission.message = message[:2000]
             db.commit()
             write_sync_index(db)
@@ -301,8 +319,16 @@ def run_once() -> bool:
         LOG_ROOT.mkdir(parents=True, exist_ok=True)
         error_text = "".join(traceback.format_exception(exc))
         (LOG_ROOT / f"{submission_id}.error.log").write_text(error_text, encoding="utf-8")
-        mark_failed(submission_id, str(exc))
-        log(f"failed submission {submission_id}: {exc}")
+        if isinstance(exc, ModelFailure):
+            mark_finished_with(submission_id, "failed", str(exc))
+            log(f"model failed for submission {submission_id}: {exc}")
+        else:
+            mark_finished_with(
+                submission_id,
+                "error",
+                f"系统错误，本次不计入每日次数，TA 会处理后重新评测。详情：{exc}",
+            )
+            log(f"system error for submission {submission_id}: {exc}")
     return True
 
 

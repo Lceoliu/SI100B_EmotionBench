@@ -4,9 +4,9 @@ import { Fragment } from 'react';
 export function StatusChip({ status }) {
   const tone = ['failed', 'rejected'].includes(status)
     ? 'danger'
-    : ['queued', 'running'].includes(status)
+    : ['queued', 'running', 'error'].includes(status)
       ? 'warning'
-      : ['final', 'passed', 'validated'].includes(status)
+      : ['passed', 'validated'].includes(status)
         ? 'success'
         : 'neutral';
   return <span className={`status status-${tone}`}>{statusLabels[status] || status}</span>;

@@ -433,33 +433,95 @@ export function GroupPanel({ user, group, onProfileUpdate }) {
           小组名
           <input value={draft.group_name} onChange={(event) => setDraft({ ...draft, group_name: event.target.value })} placeholder="例如 1组 / Team Alpha" />
         </label>
+        <p className="hint-text">和队友填写完全相同的小组名即可组队。成绩与每日正式提交次数都按小组计算。</p>
         <button className="button secondary full">保存资料</button>
       </form>
       <div className="group-name">{group.group_name || '暂未分组'}</div>
+      {group.group_name && (
+        <p className="hint-text">
+          小组排名 {group.group?.rank ? `#${group.group.rank} / ${group.group.total_groups}` : '暂无'} · 最高分 {fmtScore(group.group?.best_score)}
+        </p>
+      )}
       <ul className="mate-list">
         {(group.mates || []).map((mate) => (
           <li key={mate.id}>
             <strong>{mate.display_name}</strong>
-            <span>{mate.email}</span>
+            <span>{mate.email} · 最高分 {fmtScore(mate.best_score)}</span>
           </li>
         ))}
       </ul>
-      {!group.group_name && <p className="hint-text">分组后会在这里显示队友。</p>}
+      {!group.group_name && <p className="hint-text">未分组时只能使用测试提交。分组后会在这里显示队友和小组成绩。</p>}
     </section>
   );
 }
 
-export function Leaderboard({ rows, user, admin, onDelete, onExportCsv }) {
+export function StandingSummary({ user, standing }) {
+  if (!user || user.role !== 'student') return null;
+  if (!standing?.group_name) {
+    return (
+      <section className="window">
+        <header className="window-bar">
+          <span>我的成绩</span>
+          <small>尚未分组</small>
+        </header>
+        <p className="standing-note">
+          成绩和每日正式提交次数都按小组计算。你还没有填写小组名，目前只能使用测试提交；请在右侧“我的小组”中填写与队友相同的小组名。
+        </p>
+      </section>
+    );
+  }
+  const group = standing.group;
+  const personal = standing.personal;
+  const quota = standing.quota;
+  return (
+    <section className="window">
+      <header className="window-bar">
+        <span>我的成绩 · {standing.group_name}</span>
+        <small>小组成绩 = 组内所有正式提交的最高分</small>
+      </header>
+      <div className="metric-grid standing-grid">
+        <div>
+          <dt>小组排名</dt>
+          <dd>{group?.rank ? `#${group.rank} / ${group.total_groups}` : '暂无'}</dd>
+          <small>{group?.rank ? '按小组最高分排序' : '小组还没有通过的正式提交'}</small>
+        </div>
+        <div>
+          <dt>小组最高分（计入成绩）</dt>
+          <dd>{fmtScore(group?.best_score)}</dd>
+          <small>{group?.best_by ? `${group.best_by} 的提交 #${group.best_submission_id}` : '—'}</small>
+        </div>
+        <div>
+          <dt>我的最高分</dt>
+          <dd>{fmtScore(personal?.best_score)}</dd>
+          <small>
+            {personal
+              ? group?.best_is_mine
+                ? `提交 #${personal.best_submission_id} · 正是小组最佳`
+                : `提交 #${personal.best_submission_id}`
+              : '你还没有通过的正式提交'}
+          </small>
+        </div>
+        <div>
+          <dt>今日小组正式提交</dt>
+          <dd>{quota ? `${quota.used} / ${quota.limit}` : '—'}</dd>
+          <small>{quota ? `剩余 ${quota.remaining} 次 · 北京时间 0 点重置` : ''}</small>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function Leaderboard({ rows, user, standing, admin, onDelete, onExportCsv }) {
   const [expandedId, setExpandedId] = useState(null);
   const columns = [
     { key: 'rank', label: '#', render: (row) => <strong>{row.rank}</strong> },
-    { key: 'display_name', label: '队伍/姓名' },
-    { key: 'group_name', label: '小组', render: (row) => row.group_name || '—' },
-    { key: 'public_score', label: '最终分数', render: (row) => <strong>{fmtScore(row.public_score)}</strong> },
+    { key: 'group_name', label: '小组', render: (row) => <strong>{row.group_name}</strong> },
+    { key: 'best_score', label: '小组最高分', render: (row) => <strong>{fmtScore(row.best_score)}</strong> },
+    { key: 'submitted_by', label: '最佳提交者' },
+    { key: 'member_count', label: '成员数' },
     { key: 'params', label: '参数量', render: (row) => fmtParams(row.param_count) },
     { key: 'weight', label: 'ONNX 大小', render: (row) => `${row.weight_mb} MB` },
-    { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
-    { key: 'updated_at', label: '更新时间', render: (row) => fmtTime(row.updated_at) }
+    { key: 'created_at', label: '提交时间', render: (row) => fmtTime(row.created_at) }
   ];
   if (admin) {
     columns.push({
@@ -468,9 +530,9 @@ export function Leaderboard({ rows, user, admin, onDelete, onExportCsv }) {
       render: (row) => (
         <button className="link-button danger-link" onClick={(event) => {
           event.stopPropagation();
-          onDelete(row.id);
+          onDelete(row.submission_id);
         }}>
-          <Trash2 size={14} /> 删除记录
+          <Trash2 size={14} /> 删除该提交
         </button>
       )
     });
@@ -484,6 +546,10 @@ export function Leaderboard({ rows, user, admin, onDelete, onExportCsv }) {
     const channelLabel = channels === 1 ? '1 · 灰度' : channels === 3 ? '3 · RGB' : '—';
     return (
       <div className="leaderboard-detail">
+        <div>
+          <dt>最佳提交</dt>
+          <dd>#{row.submission_id} · {row.filename}</dd>
+        </div>
         <div>
           <dt>输入 Shape</dt>
           <dd>{shape}</dd>
@@ -505,45 +571,48 @@ export function Leaderboard({ rows, user, admin, onDelete, onExportCsv }) {
   }
 
   return (
-    <section className="window">
-      <header className="window-bar">
-        <div className="window-heading">
-          <span>最终排行榜</span>
-          <small>按排行榜评测集 Macro-F1 排序，点击记录查看摘要</small>
-        </div>
-        {admin && (
-          <button className="bar-action" onClick={onExportCsv}>
-            <Download size={14} /> 导出 CSV
-          </button>
-        )}
-      </header>
-      <DataTable
-        columns={[
-          ...columns,
-          {
-            key: 'expand',
-            label: '',
-            render: (row) => (
-              <ChevronDown
-                className={`row-chevron${expandedId === row.id ? ' expanded' : ''}`}
-                size={16}
-                aria-hidden="true"
-              />
-            )
-          }
-        ]}
-        rows={rows}
-        empty="暂时还没有通过最终评测的提交。"
-        expandedRowId={expandedId}
-        onRowClick={(row) => setExpandedId((value) => (value === row.id ? null : row.id))}
-        renderExpanded={renderLeaderboardDetail}
-        getRowClassName={(row) => (user?.role === 'student' && user.group_name && row.group_name === user.group_name ? 'my-group-row' : '')}
-      />
-    </section>
+    <div className="home-stack">
+      <StandingSummary user={user} standing={standing} />
+      <section className="window">
+        <header className="window-bar">
+          <div className="window-heading">
+            <span>小组排行榜</span>
+            <small>每组取组内最高的正式提交 Macro-F1，点击一行查看摘要</small>
+          </div>
+          {admin && (
+            <button className="bar-action" onClick={onExportCsv}>
+              <Download size={14} /> 导出 CSV
+            </button>
+          )}
+        </header>
+        <DataTable
+          columns={[
+            ...columns,
+            {
+              key: 'expand',
+              label: '',
+              render: (row) => (
+                <ChevronDown
+                  className={`row-chevron${expandedId === row.id ? ' expanded' : ''}`}
+                  size={16}
+                  aria-hidden="true"
+                />
+              )
+            }
+          ]}
+          rows={rows}
+          empty="暂时还没有小组通过正式评测。"
+          expandedRowId={expandedId}
+          onRowClick={(row) => setExpandedId((value) => (value === row.id ? null : row.id))}
+          renderExpanded={renderLeaderboardDetail}
+          getRowClassName={(row) => (user?.role === 'student' && user.group_name && row.group_name === user.group_name ? 'my-group-row' : '')}
+        />
+      </section>
+    </div>
   );
 }
 
-export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
+export function SubmitPanel({ user, config, standing, onCreated, onOpenGuide }) {
   const [file, setFile] = useState(null);
   const [mode, setMode] = useState('public');
   const [inputSize, setInputSize] = useState(112);
@@ -569,6 +638,10 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
     }
     if (!file) {
       setError('请先选择 model.onnx。');
+      return;
+    }
+    if (mode === 'public' && !user.group_name) {
+      setError('正式提交按小组计分和计次，请先在右侧“我的小组”填写小组名。未分组时可以先测试。');
       return;
     }
     if (!frameworkConfirmed) {
@@ -643,6 +716,14 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
               先测试
             </button>
           </div>
+          {user && !user.group_name && mode === 'public' && (
+            <p className="form-warning">你还没有分组：正式提交按小组计分和计次，未分组时只能测试。</p>
+          )}
+          {user?.group_name && standing?.quota && mode === 'public' && (
+            <p className="hint-text">
+              小组「{standing.quota.group_name}」今日已用 {standing.quota.used} / {standing.quota.limit} 次正式提交。系统错误和被拒绝的上传不计入。
+            </p>
+          )}
           {error && <p className="form-error">{error}</p>}
           {message && <p className="form-ok">{message}</p>}
           <button className="button primary" disabled={busy || user?.submit_disabled}>
@@ -651,7 +732,7 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
         </form>
         <div className="rule-sheet">
           <dl>
-            <div><dt>每日正式评测次数</dt><dd>{config.quota_per_day ?? 4}</dd></div>
+            <div><dt>每组每日正式评测</dt><dd>{config.quota_per_day ?? 4} 次</dd></div>
             <div><dt>最大参数量</dt><dd>{fmtParams(config.max_params)}</dd></div>
             <div><dt>ONNX 上限</dt><dd>{config.max_weight_mb ?? 200} MB</dd></div>
             <div><dt>评测超时</dt><dd>{config.eval_timeout_sec ?? 600}s</dd></div>
@@ -664,13 +745,26 @@ export function SubmitPanel({ user, config, onCreated, onOpenGuide }) {
   );
 }
 
-export function MyRuns({ rows, onRefresh, onFinal, onOpenDetail }) {
+export function MyRuns({ rows, user, standing, onRefresh, onOpenDetail }) {
+  const groupBestId = standing?.group?.best_submission_id;
+  const personalBestId = standing?.personal?.best_submission_id;
   const columns = [
     { key: 'id', label: 'ID' },
     { key: 'filename', label: '文件' },
     { key: 'mode', label: '模式', render: (row) => modeLabels[row.mode] || row.mode || '正式提交' },
-    { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
-    { key: 'public_score', label: '最终分数', render: (row) => fmtScore(row.public_score) },
+    {
+      key: 'status',
+      label: '状态',
+      render: (row) => (
+        <div className="inline-actions">
+          <StatusChip status={row.status} />
+          {row.id === groupBestId && <span className="status status-success">小组最佳</span>}
+          {row.id === personalBestId && row.id !== groupBestId && <span className="status status-neutral">我的最佳</span>}
+        </div>
+      )
+    },
+    { key: 'public_score', label: '分数', render: (row) => fmtScore(row.public_score) },
+    { key: 'message', label: '说明', render: (row) => <span className="cell-message" title={row.message}>{row.message}</span> },
     { key: 'param_count', label: '参数量', render: (row) => fmtParams(row.param_count) },
     { key: 'created_at', label: '创建时间', render: (row) => fmtTime(row.created_at) },
     {
@@ -681,28 +775,19 @@ export function MyRuns({ rows, onRefresh, onFinal, onOpenDetail }) {
           查看详情
         </button>
       )
-    },
-    {
-      key: 'final',
-      label: '最终提交',
-      render: (row) =>
-        row.final_pick ? (
-          <span className="status status-success">已选择</span>
-        ) : (
-          <button className="link-button" disabled={!['passed', 'final'].includes(row.status)} onClick={() => onFinal(row.id)}>
-            设为最终
-          </button>
-        )
     }
   ];
   return (
-    <section className="window">
-      <header className="window-bar">
-        <span>我的提交记录</span>
-        <button className="bar-action" onClick={onRefresh}>刷新</button>
-      </header>
-      <DataTable columns={columns} rows={rows} empty="登录并上传模型包后，这里会显示你的提交记录。" />
-    </section>
+    <div className="home-stack">
+      <StandingSummary user={user} standing={standing} />
+      <section className="window">
+        <header className="window-bar">
+          <span>我的提交记录</span>
+          <button className="bar-action" onClick={onRefresh}>刷新</button>
+        </header>
+        <DataTable columns={columns} rows={rows} empty="登录并上传模型后，这里会显示你的提交记录。" />
+      </section>
+    </div>
   );
 }
 
@@ -785,7 +870,7 @@ export function SubmissionDetail({ submissionId, onBack, backLabel = '返回我�
         <div className="detail-summary">
           <div className="detail-status">
             <StatusChip status={submission?.status || 'queued'} />
-            <strong>{running ? '评测进行中' : submission?.status === 'passed' || submission?.status === 'final' ? '评测已完成' : '等待结果'}</strong>
+            <strong>{detailHeadline(submission?.status)}</strong>
             <p>{submission?.message || '正在同步提交状态。'}</p>
           </div>
           <div className="detail-score">
@@ -876,6 +961,15 @@ export function SubmissionDetail({ submissionId, onBack, backLabel = '返回我�
   );
 }
 
+function detailHeadline(status) {
+  if (['queued', 'running'].includes(status)) return '评测进行中';
+  if (status === 'passed' || status === 'validated') return '评测已完成';
+  if (status === 'failed') return '模型评测失败（计入当日次数）';
+  if (status === 'error') return '系统错误（不计入次数，TA 会重新评测）';
+  if (status === 'rejected') return '上传未通过检查（不计入次数）';
+  return '等待结果';
+}
+
 function dateTimeInputValue(value) {
   if (!value || String(value).includes('XX')) return '';
   const date = new Date(value);
@@ -924,8 +1018,9 @@ function DashboardPanel({ dashboard, onRefresh }) {
       <div className="metric-grid">
         <div><dt>提交归档</dt><dd>{storage.submissions_mb ?? 0} MB</dd></div>
         <div><dt>评测结果</dt><dd>{storage.results_mb ?? 0} MB</dd></div>
-        <div><dt>失败/拒绝</dt><dd>{(counts.failed || 0) + (counts.rejected || 0)}</dd></div>
-        <div><dt>通过</dt><dd>{(counts.passed || 0) + (counts.final || 0)}</dd></div>
+        <div><dt>模型失败/拒绝</dt><dd>{(counts.failed || 0) + (counts.rejected || 0)}</dd></div>
+        <div><dt>系统错误</dt><dd>{counts.error || 0}</dd></div>
+        <div><dt>通过</dt><dd>{counts.passed || 0}</dd></div>
       </div>
     </section>
   );
@@ -965,7 +1060,7 @@ function SettingsPanel({ config, onSaveSettings }) {
       </header>
       <form className="settings-form" onSubmit={submit}>
         <label>
-          最终提交截止时间
+          正式提交截止时间
           <input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
         </label>
         <label>
@@ -1045,7 +1140,7 @@ function StudentManager({ students, onSaveGroup, onToggleDisabled, onUpdateContr
     },
     {
       key: 'daily_quota',
-      label: '今日正式评测',
+      label: '小组今日正式评测',
       render: (row) => (
         <div className="quota-cell">
           <strong>{row.daily_public_used ?? 0} / {row.daily_public_quota ?? '—'}</strong>
@@ -1120,7 +1215,7 @@ function StudentManager({ students, onSaveGroup, onToggleDisabled, onUpdateContr
             {row.leaderboard_hidden ? '显示榜单' : '隐藏榜单'}
           </button>
           <button className="link-button" onClick={() => onResetQuota(row.id)}>
-            <RotateCw size={14} /> 刷新次数
+            <RotateCw size={14} /> 刷新小组次数
           </button>
         </div>
       )
@@ -1218,6 +1313,8 @@ export function OpsPanel({
   onCreateInvite,
   onDeleteInvite,
   onDeleteSubmission,
+  onRejudgeSubmission,
+  onRejudgeErrors,
   onOpenSubmissionDetail,
   onSaveSettings,
   onRefreshDashboard
@@ -1232,6 +1329,11 @@ export function OpsPanel({
           <button className="link-button" onClick={() => onOpenSubmissionDetail(row.id)}>
             查看详情
           </button>
+          {['passed', 'failed', 'error', 'validated'].includes(row.status) && (
+            <button className="link-button" onClick={() => onRejudgeSubmission(row.id)}>
+              <RotateCw size={14} /> 重新评测
+            </button>
+          )}
           <button className="link-button danger-link" onClick={() => onDeleteSubmission(row.id)}>
             <Trash2 size={14} /> 删除记录
           </button>
@@ -1244,7 +1346,7 @@ export function OpsPanel({
     { key: 'mode', label: '模式', render: (row) => modeLabels[row.mode] || row.mode || '正式提交' },
     { key: 'filename', label: '文件' },
     { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
-    { key: 'message', label: '信息' },
+    { key: 'message', label: '信息', render: (row) => <span className="cell-message" title={row.message}>{row.message}</span> },
     { key: 'updated_at', label: '更新时间', render: (row) => fmtTime(row.updated_at) }
   ];
   return (
@@ -1254,7 +1356,9 @@ export function OpsPanel({
       <section className="window">
         <header className="window-bar">
           <span>评测运维</span>
-          <small>管理员可见</small>
+          <button className="bar-action" onClick={onRejudgeErrors}>
+            <RotateCw size={14} /> 重新评测全部系统错误
+          </button>
         </header>
         <div className="ops-strip">
           <span><Database size={15} /> SQLite 数据库</span>

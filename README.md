@@ -7,8 +7,10 @@ Emotional Bench is a course-scale benchmark platform for face-emotion classifica
 - FastAPI backend with SQLite persistence.
 - React frontend for students and TA administrators.
 - ONNX-only submissions with NCHW input validation.
-- Public leaderboard, personal submission records, and detailed reports.
-- Daily formal submission quota and separate test submissions.
+- Group grading: one leaderboard ranking each group by the best formal submission of its members.
+- Students see their own best score, their group's best score and rank, and the group's remaining daily quota.
+- Daily formal-submission quota per group; test submissions are unlimited and unscored. Students must set a group name before formal submissions.
+- Server-side evaluation failures are recorded as system errors that do not use up quota, and TAs can re-run them.
 - Docker Compose deployment with web, worker, and GPU monitor services.
 - Student kit for local training, ONNX export, and devset checks.
 

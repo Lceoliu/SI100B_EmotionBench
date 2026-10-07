@@ -7,9 +7,9 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import env
-from app.config import load_config, public_config_payload
+from app.config import public_config_payload
 from app.db import get_db
-from app.leaderboard import leaderboard_rows_payload
+from app.leaderboard import group_leaderboard
 from app.resources import RESOURCE_MANIFEST, find_resource, resource_payload
 from app.security import DOWNLOAD_EVENTS, check_rate_limit, client_key
 
@@ -48,5 +48,4 @@ def download_resource(resource_id: str, request: Request) -> FileResponse:
 
 @router.get("/api/leaderboard")
 def leaderboard(db: Session = Depends(get_db)) -> dict[str, Any]:
-    reveal_private = bool(load_config().get("reveal_private", False))
-    return {"rows": leaderboard_rows_payload(db, reveal_private=reveal_private)}
+    return {"rows": group_leaderboard(db)}

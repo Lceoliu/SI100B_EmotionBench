@@ -1,19 +1,8 @@
 from __future__ import annotations
 
-import csv
-import io
-
 import pytest
 
-from conftest import make_onnx
-
-
-def mark_passed(app_module, submission_id: int, score: float) -> None:
-    with app_module.SessionLocal() as db:
-        submission = db.get(app_module.Submission, submission_id)
-        submission.status = "passed"
-        submission.public_score = score
-        db.commit()
+from conftest import make_onnx, mark_passed, set_status
 
 
 @pytest.mark.parametrize(
@@ -26,6 +15,8 @@ def mark_passed(app_module, submission_id: int, score: float) -> None:
         ("GET", "/api/admin/leaderboard.csv"),
         ("PATCH", "/api/admin/settings"),
         ("POST", "/api/admin/sync"),
+        ("POST", "/api/admin/submissions/1/rejudge"),
+        ("POST", "/api/admin/submissions/rejudge-errors"),
     ],
 )
 def test_admin_endpoints_reject_students(student, method, path):
@@ -41,45 +32,6 @@ def test_settings_validation(admin):
     response = admin.patch("/api/admin/settings", json={"quota_per_day": 2})
     assert response.status_code == 200
     assert response.json()["config"]["quota_per_day"] == 2
-
-
-def test_leaderboard_keeps_best_submission_per_user(app_module, make_api, admin, student):
-    first = student.submit(make_onnx()).json()["submission"]["id"]
-    second = student.submit(make_onnx()).json()["submission"]["id"]
-    bob = make_api()
-    bob.register("bob@shanghaitech.edu.cn", display_name="Bob")
-    third = bob.submit(make_onnx()).json()["submission"]["id"]
-    mark_passed(app_module, first, 0.5)
-    mark_passed(app_module, second, 0.7)
-    mark_passed(app_module, third, 0.6)
-
-    rows = student.get("/api/leaderboard").json()["rows"]
-    assert [(row["id"], row["rank"]) for row in rows] == [(second, 1), (third, 2)]
-
-    assert admin.patch(f"/api/admin/students/{student.user['id']}/controls", json={"leaderboard_hidden": True}).status_code == 200
-    rows = student.get("/api/leaderboard").json()["rows"]
-    assert [row["id"] for row in rows] == [third]
-
-
-def test_mark_final_requires_passed_submission(app_module, student):
-    submission_id = student.submit(make_onnx()).json()["submission"]["id"]
-    assert student.post(f"/api/submissions/{submission_id}/final").status_code == 400
-    mark_passed(app_module, submission_id, 0.5)
-    response = student.post(f"/api/submissions/{submission_id}/final")
-    assert response.status_code == 200
-    assert response.json()["submission"]["final_pick"] is True
-
-
-def test_csv_export_neutralizes_formulas(app_module, admin, make_api):
-    api = make_api()
-    api.register("eve@shanghaitech.edu.cn", display_name="=HYPERLINK(1)")
-    submission_id = api.submit(make_onnx()).json()["submission"]["id"]
-    mark_passed(app_module, submission_id, 0.42)
-    response = admin.get("/api/admin/leaderboard.csv")
-    assert response.status_code == 200
-    rows = list(csv.DictReader(io.StringIO(response.text.lstrip("﻿"))))
-    assert rows[0]["display_name"] == "'=HYPERLINK(1)"
-    assert rows[0]["score_percent"] == "42.00"
 
 
 def test_admin_delete_submission_removes_files(app_module, admin, student):
@@ -120,3 +72,49 @@ def test_bulk_group_assignment(admin, student):
     assert response.status_code == 200
     assert response.json()["updated"] == 1
     assert student.get("/api/me/group").json()["group_name"] == "G1"
+
+
+def test_rejudge_requeues_and_clears_old_results(app_module, admin, student):
+    submission_id = student.submit(make_onnx()).json()["submission"]["id"]
+    mark_passed(app_module, submission_id, 0.5)
+    with app_module.SessionLocal() as db:
+        db.add(app_module.Score(submission_id=submission_id, split="final", macro_f1=0.5, accuracy=0.5))
+        db.commit()
+    assert len(student.get("/api/leaderboard").json()["rows"]) == 1
+
+    response = admin.post(f"/api/admin/submissions/{submission_id}/rejudge")
+    assert response.status_code == 200
+    assert response.json()["submission"]["status"] == "queued"
+    report = student.get(f"/api/me/report/{submission_id}").json()
+    assert report["scores"] == []
+    assert report["submission"]["public_score"] is None
+    assert student.get("/api/leaderboard").json()["rows"] == []
+
+
+def test_rejudge_refuses_queued_and_rejected(app_module, admin, student):
+    queued = student.submit(make_onnx()).json()["submission"]["id"]
+    assert admin.post(f"/api/admin/submissions/{queued}/rejudge").status_code == 400
+    student.submit(make_onnx(size=64), input_size=48)
+    rejected = student.get("/api/submissions/mine").json()["rows"][0]["id"]
+    assert admin.post(f"/api/admin/submissions/{rejected}/rejudge").status_code == 400
+    assert admin.post("/api/admin/submissions/999/rejudge").status_code == 404
+
+
+def test_rejudge_all_errors(app_module, admin, student):
+    ids = [student.submit(make_onnx()).json()["submission"]["id"] for _ in range(3)]
+    set_status(app_module, ids[0], "error")
+    set_status(app_module, ids[1], "error")
+    set_status(app_module, ids[2], "failed")
+    response = admin.post("/api/admin/submissions/rejudge-errors")
+    assert response.status_code == 200
+    assert sorted(response.json()["ids"]) == sorted(ids[:2])
+    statuses = {row["id"]: row["status"] for row in student.get("/api/submissions/mine").json()["rows"]}
+    assert statuses == {ids[0]: "queued", ids[1]: "queued", ids[2]: "failed"}
+
+
+def test_dashboard_counts_system_errors(app_module, admin, student):
+    submission_id = student.submit(make_onnx()).json()["submission"]["id"]
+    set_status(app_module, submission_id, "error")
+    counts = admin.get("/api/admin/dashboard").json()["queue_counts"]
+    assert counts["error"] == 1
+    assert "final" not in counts

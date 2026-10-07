@@ -56,17 +56,103 @@ def test_dry_run_submission_is_validated(monkeypatch, app_module, student):
     assert student.get("/api/leaderboard").json()["rows"] == []
 
 
-def test_container_failure_marks_submission_failed(monkeypatch, app_module, student):
+def run_with_container_error(monkeypatch, student, exc: Exception) -> dict:
     from worker import runner
 
     write_split("final", {"a.jpg": 3})
 
     def boom(*args, **kwargs):
-        raise RuntimeError("sandbox exploded")
+        raise exc
 
     monkeypatch.setattr(runner, "run_eval_container", boom)
     submission_id = student.submit(make_onnx()).json()["submission"]["id"]
     assert runner.run_once() is True
-    report = student.get(f"/api/me/report/{submission_id}").json()
-    assert report["submission"]["status"] == "failed"
-    assert "sandbox exploded" in report["submission"]["message"]
+    return student.get(f"/api/me/report/{submission_id}").json()["submission"]
+
+
+def test_model_failure_marks_submission_failed(monkeypatch, app_module, student):
+    from worker.runner import ModelFailure
+
+    submission = run_with_container_error(monkeypatch, student, ModelFailure("ONNX output must be [B, 7]"))
+    assert submission["status"] == "failed"
+    assert "ONNX output" in submission["message"]
+
+
+def test_infrastructure_failure_is_a_system_error(monkeypatch, app_module, student):
+    submission = run_with_container_error(monkeypatch, student, RuntimeError("docker daemon unreachable"))
+    assert submission["status"] == "error"
+    assert "不计入" in submission["message"]
+    assert student.get("/api/me/group").json()["quota"]["used"] == 0
+
+
+def test_missing_evaluation_data_is_a_system_error(app_module, student):
+    from worker import runner
+
+    submission_id = student.submit(make_onnx()).json()["submission"]["id"]
+    assert runner.run_once() is True
+    assert student.get(f"/api/me/report/{submission_id}").json()["submission"]["status"] == "error"
+
+
+class FakeContainer:
+    def __init__(self, *, exit_code: int = 0, wait_error: Exception | None = None, logs: bytes = b"") -> None:
+        self.exit_code = exit_code
+        self.wait_error = wait_error
+        self._logs = logs
+        self.removed = False
+
+    def wait(self, timeout):
+        if self.wait_error:
+            raise self.wait_error
+        return {"StatusCode": self.exit_code}
+
+    def logs(self, stdout, stderr):
+        return self._logs
+
+    def stop(self, timeout):
+        pass
+
+    def remove(self, force):
+        self.removed = True
+
+
+def run_fake_container(monkeypatch, tmp_path, container: FakeContainer):
+    from types import SimpleNamespace
+
+    from worker import runner
+
+    client = SimpleNamespace(containers=SimpleNamespace(run=lambda *args, **kwargs: container))
+    monkeypatch.setattr(runner.docker, "from_env", lambda: client)
+    return runner.run_eval_container(tmp_path / "sub", tmp_path / "data", tmp_path / "out", 5, {})
+
+
+def test_nonzero_sandbox_exit_is_a_model_failure(monkeypatch, tmp_path):
+    import pytest
+
+    from worker.runner import ModelFailure
+
+    container = FakeContainer(exit_code=1, logs=b"RuntimeError: ONNX output must be [B, 7]")
+    with pytest.raises(ModelFailure, match="ONNX output"):
+        run_fake_container(monkeypatch, tmp_path, container)
+    assert container.removed
+
+
+def test_sandbox_data_error_exit_is_not_a_model_failure(monkeypatch, tmp_path):
+    import pytest
+
+    from worker.runner import SANDBOX_DATA_ERROR_EXIT, ModelFailure
+
+    container = FakeContainer(exit_code=SANDBOX_DATA_ERROR_EXIT, logs=b"data error: no images")
+    with pytest.raises(RuntimeError) as excinfo:
+        run_fake_container(monkeypatch, tmp_path, container)
+    assert not isinstance(excinfo.value, ModelFailure)
+
+
+def test_sandbox_timeout_is_a_model_failure(monkeypatch, tmp_path):
+    import pytest
+    import requests
+
+    from worker.runner import ModelFailure
+
+    container = FakeContainer(wait_error=requests.exceptions.ReadTimeout("Read timed out"))
+    with pytest.raises(ModelFailure, match="超时"):
+        run_fake_container(monkeypatch, tmp_path, container)

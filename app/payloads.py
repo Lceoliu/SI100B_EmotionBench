@@ -42,7 +42,7 @@ def invite_payload(invite: InviteCode) -> dict[str, Any]:
     }
 
 
-def submission_payload(submission: Submission, reveal_private: bool = False) -> dict[str, Any]:
+def submission_payload(submission: Submission) -> dict[str, Any]:
     return {
         "id": submission.id,
         "email": submission.user.student_id,
@@ -61,9 +61,6 @@ def submission_payload(submission: Submission, reveal_private: bool = False) -> 
         "param_count": submission.param_count,
         "weight_mb": round(submission.weight_mb, 2),
         "public_score": submission.public_score,
-        "private_score": submission.private_score if reveal_private else None,
-        "realworld_score": submission.realworld_score if reveal_private else None,
-        "final_pick": submission.final_pick,
         "created_at": now_iso(submission.created_at),
         "updated_at": now_iso(submission.updated_at),
     }

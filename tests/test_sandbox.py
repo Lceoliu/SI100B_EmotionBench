@@ -41,3 +41,23 @@ def test_evaluate_writes_predictions(tmp_path, monkeypatch, sandbox, channels, s
     assert payload["count"] == 5
     assert payload["input_channels"] == channels
     assert set(payload["predictions"].values()) == {4}
+
+
+def test_missing_data_exits_with_data_error_code(tmp_path):
+    import os
+    import subprocess
+
+    sub_dir, data_dir = tmp_path / "sub", tmp_path / "data"
+    sub_dir.mkdir()
+    data_dir.mkdir()
+    (sub_dir / "model.onnx").write_bytes(make_onnx())
+    env = {**os.environ, "SUBMISSION_DIR": str(sub_dir), "DATA_DIR": str(data_dir), "RESULT_DIR": str(tmp_path / "out")}
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "sandbox" / "evaluate.py")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 3, result.stderr
+    assert "data error" in result.stderr
