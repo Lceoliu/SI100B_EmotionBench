@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 from app import env
 from app.db import engine
 from app.models import Setting
-from app.onnx_validation import ALLOWED_CHANNELS, ALLOWED_INPUT_SIZES
 
 BOOLEAN_SETTINGS = {"freeze_leaderboard"}
 
@@ -83,23 +82,3 @@ def normalize_deadline(value: Any) -> str:
     if parsed is None:
         raise HTTPException(status_code=400, detail="截止时间格式无效。请使用 ISO 时间，例如 2026-06-30T23:59:59+08:00。")
     return parsed.isoformat()
-
-
-def public_config_payload() -> dict[str, Any]:
-    cfg = load_config()
-    return {
-        "quota_per_day": configured_quota_per_day(cfg),
-        "max_params": cfg.get("max_params", 50_000_000),
-        "max_weight_mb": cfg.get("max_weight_mb", 200),
-        "eval_timeout_sec": cfg.get("eval_timeout_sec", 600),
-        "num_classes": cfg.get("num_classes", 7),
-        "submission_format": "onnx",
-        "allowed_input_sizes": sorted(ALLOWED_INPUT_SIZES),
-        "allowed_input_channels": sorted(ALLOWED_CHANNELS),
-        "normalize": {
-            "gray": {"mean": [0.5077], "std": [0.2551]},
-            "rgb": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
-        },
-        "freeze_leaderboard": bool(cfg.get("freeze_leaderboard", False)),
-        "final_pick_deadline": cfg.get("final_pick_deadline"),
-    }

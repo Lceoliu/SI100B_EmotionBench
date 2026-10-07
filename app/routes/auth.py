@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -8,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import env
+from app.course import course_info, email_allowed, email_requirement_text
 from app.db import get_db
 from app.models import InviteCode, User
 from app.payloads import user_payload
@@ -23,9 +23,6 @@ from app.security import (
 )
 
 router = APIRouter()
-
-EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@shanghaitech\.edu\.cn$")
-
 
 @router.get("/api/session")
 def session_info(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
@@ -48,8 +45,9 @@ async def register(request: Request, db: Session = Depends(get_db)) -> dict[str,
     student_id = str(data.get("email") or data.get("student_id") or "").strip().lower()
     display_name = str(data.get("display_name", "")).strip()
     password = str(data.get("password", ""))
-    if not EMAIL_RE.fullmatch(student_id) or len(student_id) > 64:
-        raise HTTPException(status_code=400, detail="请使用 @shanghaitech.edu.cn 邮箱注册。")
+    domains = course_info()["email_domains"]
+    if len(student_id) > 64 or not email_allowed(student_id, domains):
+        raise HTTPException(status_code=400, detail=email_requirement_text(domains))
     if "@" not in student_id or len(display_name) < 2 or len(password) < env.MIN_PASSWORD_LENGTH:
         raise HTTPException(status_code=400, detail="请填写有效邮箱、姓名，以及至少 8 位密码。")
     if db.scalar(select(User).where(User.student_id == student_id)):

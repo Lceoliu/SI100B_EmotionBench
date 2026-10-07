@@ -63,6 +63,8 @@ docker compose up -d gpu-monitor
 
 The backend reads `config.yaml` and persistent admin settings from SQLite. The frontend is served from `frontend/dist`.
 
+Before each semester, edit the `course`, `lectures` and `resources` sections of `config.yaml`: course name and term, allowed registration email domains, instructors and TAs, course links, lab cards, and the files served from `storage/resources/`. Restarting is not required; the values are read per request.
+
 Evaluation data lives outside git:
 
 ```text

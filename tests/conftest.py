@@ -23,11 +23,23 @@ TEST_CONFIG.write_text(
             "num_classes: 7",
             "freeze_leaderboard: false",
             'final_pick_deadline: ""',
+            "course:",
+            "  name: SI100B",
+            "  term: Test Term",
+            "  email_domains: [shanghaitech.edu.cn]",
+            "  tas: [{name: TA One, url: 'https://example.com/ta'}, {name: TA Two}]",
+            "lectures:",
+            "  - {title: Lab 1, detail: Basics, resource: lab1}",
+            "resources:",
+            "  - {id: lab1, title: Lab 1, filename: lab1.pdf}",
+            "  - {id: student-kit, title: Kit, filename: kit.zip, media_type: application/zip}",
+            "  - {id: escape, title: Escape, filename: ../../config.yaml}",
         ]
     )
     + "\n",
     encoding="utf-8",
 )
+BASE_CONFIG = TEST_CONFIG.read_text(encoding="utf-8")
 
 # app.env reads its paths and secrets at import time, so the environment must be
 # in place before any test module imports it.
@@ -146,6 +158,17 @@ def make_onnx(
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
     model.ir_version = 8
     return model.SerializeToString()
+
+
+@pytest.fixture
+def extra_config():
+    """Append YAML to the test config.yaml for one test."""
+
+    def apply(text: str) -> None:
+        TEST_CONFIG.write_text(BASE_CONFIG + text, encoding="utf-8")
+
+    yield apply
+    TEST_CONFIG.write_text(BASE_CONFIG, encoding="utf-8")
 
 
 @pytest.fixture

@@ -7,10 +7,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import env
-from app.config import public_config_payload
 from app.db import get_db
 from app.leaderboard import group_leaderboard
-from app.resources import RESOURCE_MANIFEST, find_resource, resource_payload
+from app.public_config import public_config_payload
+from app.resources import find_resource, resource_rows
 from app.security import DOWNLOAD_EVENTS, check_rate_limit, client_key
 
 router = APIRouter()
@@ -28,7 +28,7 @@ def api_config() -> dict[str, Any]:
 
 @router.get("/api/resources")
 def api_resources() -> dict[str, Any]:
-    return {"rows": [resource_payload(item) for item in RESOURCE_MANIFEST]}
+    return {"rows": resource_rows()}
 
 
 @router.api_route("/api/resources/{resource_id}/download", methods=["GET", "HEAD"])

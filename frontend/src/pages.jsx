@@ -20,11 +20,11 @@ import {
   Trash2,
   UploadCloud
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 
 import { api, setCsrfToken } from './api.js';
 import { DataTable, StatusChip } from './components.jsx';
-import { datasetExamples, lectureItems, modeLabels, statusLabels } from './constants.jsx';
+import { datasetExamples, modeLabels, statusLabels } from './constants.jsx';
 import { fmtParams, fmtScore, fmtTime } from './formatters.js';
 
 function resourceMapFrom(resources) {
@@ -33,7 +33,21 @@ function resourceMapFrom(resources) {
   return next;
 }
 
-export function HomePage({ resources }) {
+function PersonLinks({ people }) {
+  if (!people?.length) return <span>—</span>;
+  return people.map((person, index) => (
+    <Fragment key={person.name}>
+      {index > 0 && '，'}
+      {person.url ? (
+        <a href={person.url} target="_blank" rel="noreferrer">{person.name}</a>
+      ) : (
+        <span>{person.name}</span>
+      )}
+    </Fragment>
+  ));
+}
+
+export function HomePage({ resources, course, lectures }) {
   const resourceMap = useMemo(() => resourceMapFrom(resources), [resources]);
   const projectRules = resourceMap.get('project-rules');
   const codeFramework = resourceMap.get('student-kit');
@@ -49,22 +63,16 @@ export function HomePage({ resources }) {
         <div className="home-intro">
           <div>
             <h2>从人脸检测到表情识别</h2>
-            <p>
-              本项目为 SI100B 课程Project 人脸检测与表情分类的评测平台。用户可以提交模型并查看最终排行榜结果。
-            </p>
+            <p>{course.description || '人脸检测与表情分类课程项目的评测平台。学生可以提交模型并查看小组排行榜。'}</p>
           </div>
           <ol className="process-list">
             <li>
               <span>课程教师</span>
-              <span className="ta-line">
-                <a href="https://sist.shanghaitech.edu.cn/lzh/main.htm" target="_blank" rel="noreferrer">李正浩</a>
-              </span>
+              <span className="ta-line"><PersonLinks people={course.instructors} /></span>
             </li>
             <li>
               <span>TA</span>
-              <span className="ta-line">
-                <a href="https://lceoliu.github.io/" target="_blank" rel="noreferrer">刘畅</a>，<a href="" target="_blank" rel="noreferrer">张境轩</a>
-              </span>
+              <span className="ta-line"><PersonLinks people={course.tas} /></span>
             </li>
           </ol>
         </div>
@@ -73,11 +81,11 @@ export function HomePage({ resources }) {
       <section className="window">
         <header className="window-bar">
           <span>课程路径</span>
-          <small>8 次 lab 主题</small>
+          <small>{lectures.length} 次 lab 主题</small>
         </header>
         <div className="lecture-grid">
-          {lectureItems.map((item) => {
-            const resource = resourceMap.get(item.resourceId);
+          {lectures.map((item) => {
+            const resource = resourceMap.get(item.resource_id);
             return (
               <div className="lecture-row" key={item.title}>
                 <strong>{item.title}</strong>
@@ -105,10 +113,12 @@ export function HomePage({ resources }) {
           <small>课程资料入口</small>
         </header>
         <div className="resource-grid">
-          <a className="resource-link" href="https://elearning.shanghaitech.edu.cn:8443/webapps/blackboard/content/listContentEditable.jsp?content_id=_173911_1&course_id=_5304_1" target="_blank" rel="noreferrer">
-            <ExternalLink size={18} />
-            <span>Blackboard 课程资源</span>
-          </a>
+          {(course.links || []).map((link) => (
+            <a className="resource-link" href={link.url} target="_blank" rel="noreferrer" key={link.url}>
+              <ExternalLink size={18} />
+              <span>{link.label}</span>
+            </a>
+          ))}
           {codeFramework?.available && (
             <a className="resource-link" href={codeFramework.download_url}>
               <Download size={18} />
@@ -124,7 +134,7 @@ export function HomePage({ resources }) {
           <div className="resource-note">
             <strong>项目评分</strong>
             <p>
-              课程project评分包含参与与 checkpoint、bonus，以及最终提交的文字报告。平台评测只负责模型提交、最终排行榜和最终提交记录。完整规则请查看{' '}
+              课程 project 评分包含参与与 checkpoint、bonus，以及最终提交的文字报告。平台只负责模型评测和小组排行榜：小组成绩取组内成员正式提交的最高分。完整规则请查看{' '}
               {projectRules?.available ? (
                 <a href={projectRules.download_url}>此处的文件下载链接</a>
               ) : (
@@ -252,7 +262,7 @@ export function DatasetGuide({ resources, onBack }) {
   );
 }
 
-export function AuthPanel({ user, onSession, onAfterLogin }) {
+export function AuthPanel({ user, emailDomains, onSession, onAfterLogin }) {
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ email: '', display_name: '', password: '', invite_code: '' });
   const [error, setError] = useState('');
@@ -307,7 +317,7 @@ export function AuthPanel({ user, onSession, onAfterLogin }) {
       <form className="stack" onSubmit={submit}>
         <label>
           邮箱
-          <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@shanghaitech.edu.cn" />
+          <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder={`name@${emailDomains[0] || 'example.com'}`} />
         </label>
         {mode === 'register' && (
           <label>
@@ -329,7 +339,9 @@ export function AuthPanel({ user, onSession, onAfterLogin }) {
             <input value={form.invite_code} onChange={(e) => setForm({ ...form, invite_code: e.target.value })} />
           </label>
         )}
-        {mode === 'register' && <p className="hint-text">仅支持 @shanghaitech.edu.cn 邮箱注册。</p>}
+        {mode === 'register' && emailDomains.length > 0 && (
+          <p className="hint-text">仅支持 {emailDomains.map((domain) => `@${domain}`).join(' / ')} 邮箱注册。</p>
+        )}
         {error && <p className="form-error">{error}</p>}
         <button className="button primary full" disabled={busy}>
           <LogIn size={16} /> {busy ? '处理中' : mode === 'login' ? '登录' : '创建账号'}

@@ -11,11 +11,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import env
-from app.config import load_config, normalize_deadline, public_config_payload, set_setting
+from app.config import load_config, normalize_deadline, set_setting
 from app.db import get_db
 from app.leaderboard import leaderboard_csv, write_sync_index
 from app.models import InviteCode, Score, Submission, User
 from app.payloads import invite_payload, score_payload, submission_payload, user_payload
+from app.public_config import public_config_payload
 from app.quota import admin_student_payload, reset_quota_for
 from app.security import admin_user, pwd_context, revoke_other_sessions, verify_mutation_request
 from app.submissions import bytes_mb, folder_size, remove_submission_artifacts

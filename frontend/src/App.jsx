@@ -49,6 +49,14 @@ function App() {
   const [detailOrigin, setDetailOrigin] = useState('runs');
 
   const tabs = useMemo(() => (user?.role === 'admin' ? [...baseTabs, adminTab] : baseTabs), [user]);
+  const course = config.course || {};
+  const courseLabel = [course.name, course.term].filter(Boolean).join(' ');
+  const title = active === 'home' && course.project_title ? course.project_title : pageTitles[active];
+  const copy = active === 'home' && courseLabel ? `${courseLabel} 课程项目评测平台。${pageCopy.home}` : pageCopy[active];
+
+  useEffect(() => {
+    document.title = course.name ? `${course.name} Emotion Bench` : 'Emotion Bench';
+  }, [course.name]);
 
   useEffect(() => {
     if (active === 'ops' && user?.role !== 'admin') setActive('home');
@@ -346,14 +354,14 @@ function App() {
         <section className="content">
           <div className="page-head">
             <div>
-              <h1>{pageTitles[active]}</h1>
-              <p>{pageCopy[active]}</p>
+              <h1>{title}</h1>
+              <p>{copy}</p>
             </div>
             <button className="button secondary" onClick={refreshAll}>刷新</button>
           </div>
 
           {notice && <div className="notice">{notice}</div>}
-          {active === 'home' && <HomePage resources={resources} />}
+          {active === 'home' && <HomePage resources={resources} course={course} lectures={config.lectures || []} />}
           {active === 'leaderboard' && (
             <Leaderboard
               rows={leaderboard}
@@ -420,7 +428,7 @@ function App() {
         </section>
 
         <aside className="utility">
-          <AuthPanel user={user} onSession={setUser} onAfterLogin={(nextUser) => setActive(nextUser.role === 'admin' ? 'ops' : 'home')} />
+          <AuthPanel user={user} emailDomains={course.email_domains || []} onSession={setUser} onAfterLogin={(nextUser) => setActive(nextUser.role === 'admin' ? 'ops' : 'home')} />
           <GroupPanel user={user} group={group} onProfileUpdate={updateProfile} />
           <section className="utility-block">
             <div className="mini-title">系统状态</div>
