@@ -11,10 +11,11 @@ services:
     environment:
       APP_ENV: "${APP_ENV:-prod}"
       BENCH_ROOT: /workspace
-      HOST_BENCH_ROOT: /home/SI100B_26Fall/emotion-bench
       DATABASE_URL: "${DATABASE_URL:-sqlite:////workspace/storage/bench.db}"
       CONFIG_PATH: /workspace/config.yaml
       FRONTEND_DIST: /workspace/frontend/dist
+      # Peers allowed to set X-Forwarded-For (your reverse proxy). Read by uvicorn.
+      FORWARDED_ALLOW_IPS: "${FORWARDED_ALLOW_IPS:-127.0.0.1}"
       SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY in .env}"
       SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-0}"
       ADMIN_INITIAL_PASSWORD: "${ADMIN_INITIAL_PASSWORD:-}"
@@ -38,7 +39,8 @@ services:
     profiles: ["worker"]
     environment:
       BENCH_ROOT: /workspace
-      HOST_BENCH_ROOT: /home/SI100B_26Fall/emotion-bench
+      # Absolute path of this checkout on the Docker host; eval containers mount data from it.
+      HOST_BENCH_ROOT: "${HOST_BENCH_ROOT:?set HOST_BENCH_ROOT in .env to the absolute path of this checkout}"
       DATABASE_URL: "${DATABASE_URL:-sqlite:////workspace/storage/bench.db}"
       CONFIG_PATH: /workspace/config.yaml
       SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY in .env}"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import csv
 import io
 import json
@@ -18,7 +17,7 @@ from urllib.parse import urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from passlib.context import CryptContext
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, event, func, select, text
@@ -187,8 +186,76 @@ if DATABASE_URL.startswith("sqlite"):
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
+MAX_JSON_BODY_BYTES = 1024 * 1024
+MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+
+
+class RequestBodyTooLarge(HTTPException):
+    def __init__(self, limit: int) -> None:
+        super().__init__(status_code=413, detail=f"请求体过大（上限 {limit / 1024 / 1024:.0f} MB）。")
+
+
+def max_request_body_bytes(path: str) -> int:
+    if path == "/api/submissions":
+        try:
+            max_weight_mb = float(load_config().get("max_weight_mb", 200))
+        except (TypeError, ValueError):
+            max_weight_mb = 200.0
+        return int(max_weight_mb * 1024 * 1024) + MULTIPART_OVERHEAD_BYTES
+    return MAX_JSON_BODY_BYTES
+
+
+class RequestSizeLimitMiddleware:
+    """Reject oversized bodies before they are spooled to disk or read into memory."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope["method"] in {"GET", "HEAD", "OPTIONS"}:
+            await self.app(scope, receive, send)
+            return
+        limit = max_request_body_bytes(scope["path"])
+        content_length = dict(scope["headers"]).get(b"content-length")
+        if content_length is not None and content_length.isdigit() and int(content_length) > limit:
+            await self._reject(scope, receive, send, limit)
+            return
+
+        received = 0
+        response_started = False
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise RequestBodyTooLarge(limit)
+            return message
+
+        async def tracking_send(message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracking_send)
+        except RequestBodyTooLarge:
+            if response_started:
+                raise
+            await self._reject(scope, receive, send, limit)
+
+    @staticmethod
+    async def _reject(scope, receive, send, limit: int) -> None:
+        error = RequestBodyTooLarge(limit)
+        response = JSONResponse({"detail": error.detail}, status_code=error.status_code, headers={"Connection": "close"})
+        await response(scope, receive, send)
+
+
 app = FastAPI(title="EmotionBench", version="0.1-dev")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=SESSION_COOKIE_SECURE)
+app.add_middleware(RequestSizeLimitMiddleware)
 
 EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@shanghaitech\.edu\.cn$")
 
@@ -276,8 +343,9 @@ def ensure_csrf_token(request: Request) -> str:
 
 
 def client_key(request: Request, scope: str) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    ip = forwarded.split(",", 1)[0].strip() or (request.client.host if request.client else "unknown")
+    # Never read X-Forwarded-For here: clients can forge it. uvicorn already replaces
+    # request.client with the forwarded address when the peer is in FORWARDED_ALLOW_IPS.
+    ip = request.client.host if request.client else "unknown"
     return f"{scope}:{ip}"
 
 
@@ -552,41 +620,6 @@ def admin_user(user: User = Depends(current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="需要 TA 管理员权限。")
     return user
-
-
-FORBIDDEN_IMPORTS = {
-    "ctypes",
-    "multiprocessing",
-    "os",
-    "pathlib",
-    "requests",
-    "shutil",
-    "socket",
-    "subprocess",
-    "sys",
-    "urllib",
-}
-FORBIDDEN_CALLS = {"__import__", "compile", "eval", "exec", "input", "open"}
-
-
-def validate_model_py(source: str) -> None:
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as exc:
-        raise ValueError(f"model.py syntax error: {exc.msg}") from exc
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                root_name = alias.name.split(".", 1)[0]
-                if root_name in FORBIDDEN_IMPORTS:
-                    raise ValueError(f"Forbidden import: {alias.name}")
-        elif isinstance(node, ast.ImportFrom):
-            root_name = (node.module or "").split(".", 1)[0]
-            if root_name in FORBIDDEN_IMPORTS:
-                raise ValueError(f"Forbidden import: {node.module}")
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_CALLS:
-            raise ValueError(f"Forbidden call: {node.func.id}()")
 
 
 def validate_submission_file(file_bytes: bytes, filename: str, requested_input_size: int, requested_channels: int) -> dict[str, Any]:
