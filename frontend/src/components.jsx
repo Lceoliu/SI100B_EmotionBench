@@ -1,7 +1,7 @@
 import { statusLabels } from './constants.jsx';
 import { Fragment } from 'react';
 
-export function StatusChip({ status }) {
+export function StatusChip({ status, position }) {
   const tone = ['failed', 'rejected'].includes(status)
     ? 'danger'
     : ['queued', 'running', 'error'].includes(status)
@@ -9,7 +9,8 @@ export function StatusChip({ status }) {
       : ['passed', 'validated'].includes(status)
         ? 'success'
         : 'neutral';
-  return <span className={`status status-${tone}`}>{statusLabels[status] || status}</span>;
+  const label = statusLabels[status] || status;
+  return <span className={`status status-${tone}`}>{status === 'queued' && position ? `${label} · 第 ${position} 位` : label}</span>;
 }
 
 export function DataTable({ columns, rows, empty, expandedRowId, onRowClick, renderExpanded, getRowClassName }) {

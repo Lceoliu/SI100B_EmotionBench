@@ -24,7 +24,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 
 import { api, setCsrfToken } from './api.js';
 import { DataTable, StatusChip } from './components.jsx';
-import { datasetExamples, modeLabels, statusLabels } from './constants.jsx';
+import { auditActionLabels, auditFieldLabels, datasetExamples, modeLabels, statusLabels } from './constants.jsx';
 import { fmtParams, fmtScore, fmtTime } from './formatters.js';
 
 function resourceMapFrom(resources) {
@@ -769,7 +769,7 @@ export function MyRuns({ rows, user, standing, onRefresh, onOpenDetail }) {
       label: '状态',
       render: (row) => (
         <div className="inline-actions">
-          <StatusChip status={row.status} />
+          <StatusChip status={row.status} position={row.queue_position} />
           {row.id === groupBestId && <span className="status status-success">小组最佳</span>}
           {row.id === personalBestId && row.id !== groupBestId && <span className="status status-neutral">我的最佳</span>}
         </div>
@@ -777,7 +777,6 @@ export function MyRuns({ rows, user, standing, onRefresh, onOpenDetail }) {
     },
     { key: 'public_score', label: '分数', render: (row) => fmtScore(row.public_score) },
     { key: 'message', label: '说明', render: (row) => <span className="cell-message" title={row.message}>{row.message}</span> },
-    { key: 'param_count', label: '参数量', render: (row) => fmtParams(row.param_count) },
     { key: 'created_at', label: '创建时间', render: (row) => fmtTime(row.created_at) },
     {
       key: 'detail',
@@ -881,7 +880,7 @@ export function SubmissionDetail({ submissionId, onBack, backLabel = '返回我�
         {error && <p className="form-error">{error}</p>}
         <div className="detail-summary">
           <div className="detail-status">
-            <StatusChip status={submission?.status || 'queued'} />
+            <StatusChip status={submission?.status || 'queued'} position={submission?.queue_position} />
             <strong>{detailHeadline(submission?.status)}</strong>
             <p>{submission?.message || '正在同步提交状态。'}</p>
           </div>
@@ -1311,10 +1310,67 @@ function InviteManager({ invites, onCreateInvite, onDeleteInvite }) {
   );
 }
 
+function formatAuditValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (item && typeof item === 'object' ? `${item.user}: ${item.previous || '未分组'} → ${item.current || '未分组'}` : item))
+      .join('，');
+  }
+  return String(value);
+}
+
+function formatAuditDetail(detail) {
+  const entries = Object.entries(detail || {});
+  const parts = [];
+  if ('previous' in (detail || {}) && 'current' in (detail || {})) {
+    parts.push(`${detail.previous || '未分组'} → ${detail.current || '未分组'}`);
+  }
+  entries
+    .filter(([key]) => key !== 'previous' && key !== 'current')
+    .forEach(([key, value]) => parts.push(`${auditFieldLabels[key] || key}: ${formatAuditValue(value)}`));
+  return parts.join('；') || '—';
+}
+
+function AuditLog({ rows }) {
+  const [action, setAction] = useState('');
+  const visible = action ? rows.filter((row) => row.action === action) : rows;
+  const columns = [
+    { key: 'created_at', label: '时间', render: (row) => fmtTime(row.created_at) },
+    { key: 'actor', label: '操作人', render: (row) => (row.actor_role === 'admin' ? `${row.actor_email}（TA）` : row.actor_email || '—') },
+    { key: 'action', label: '操作', render: (row) => auditActionLabels[row.action] || row.action },
+    { key: 'target', label: '对象' },
+    {
+      key: 'detail',
+      label: '详情',
+      render: (row) => {
+        const text = formatAuditDetail(row.detail);
+        return <span className="cell-message wide" title={text}>{text}</span>;
+      }
+    }
+  ];
+  return (
+    <section className="window">
+      <header className="window-bar">
+        <span>操作日志</span>
+        <select className="table-select" value={action} onChange={(event) => setAction(event.target.value)} aria-label="按操作筛选">
+          <option value="">全部操作（最近 200 条）</option>
+          {Object.entries(auditActionLabels).map(([key, label]) => (
+            <option value={key} key={key}>{label}</option>
+          ))}
+        </select>
+      </header>
+      <DataTable columns={columns} rows={visible} empty="暂无操作记录。" />
+    </section>
+  );
+}
+
 export function OpsPanel({
   queueRows,
   students,
   invites,
+  auditRows,
   config,
   dashboard,
   onSaveGroup,
@@ -1357,7 +1413,7 @@ export function OpsPanel({
     { key: 'group_name', label: '小组', render: (row) => row.group_name || '—' },
     { key: 'mode', label: '模式', render: (row) => modeLabels[row.mode] || row.mode || '正式提交' },
     { key: 'filename', label: '文件' },
-    { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} /> },
+    { key: 'status', label: '状态', render: (row) => <StatusChip status={row.status} position={row.queue_position} /> },
     { key: 'message', label: '信息', render: (row) => <span className="cell-message" title={row.message}>{row.message}</span> },
     { key: 'updated_at', label: '更新时间', render: (row) => fmtTime(row.updated_at) }
   ];
@@ -1388,6 +1444,7 @@ export function OpsPanel({
         onResetQuota={onResetQuota}
       />
       <InviteManager invites={invites} onCreateInvite={onCreateInvite} onDeleteInvite={onDeleteInvite} />
+      <AuditLog rows={auditRows} />
     </div>
   );
 }

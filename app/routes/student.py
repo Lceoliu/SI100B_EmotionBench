@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import env
+from app.audit import record, user_target
 from app.config import load_config
 from app.db import get_db
 from app.leaderboard import standing_payload, write_sync_index
@@ -27,7 +28,7 @@ from app.security import (
     revoke_other_sessions,
     verify_mutation_request,
 )
-from app.submissions import validate_submission_file
+from app.submissions import queue_snapshot, validate_submission_file, with_queue_position
 
 router = APIRouter()
 
@@ -35,7 +36,8 @@ router = APIRouter()
 @router.get("/api/submissions/mine")
 def my_submissions(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(Submission).where(Submission.user_id == user.id).order_by(Submission.created_at.desc())).all()
-    return {"rows": [submission_payload(row) for row in rows]}
+    snapshot = queue_snapshot(db)
+    return {"rows": [with_queue_position(submission_payload(row), snapshot) for row in rows]}
 
 
 @router.get("/api/me/report/{submission_id}")
@@ -44,7 +46,10 @@ def my_report(submission_id: int, user: User = Depends(current_user), db: Sessio
     if not submission or (submission.user_id != user.id and user.role != "admin"):
         raise HTTPException(status_code=404, detail="提交记录不存在。")
     rows = db.scalars(select(Score).where(Score.submission_id == submission_id).order_by(Score.split.asc())).all()
-    return {"submission": submission_payload(submission), "scores": [score_payload(row) for row in rows]}
+    return {
+        "submission": with_queue_position(submission_payload(submission), queue_snapshot(db)),
+        "scores": [score_payload(row) for row in rows],
+    }
 
 
 @router.get("/api/me/report/{submission_id}/confusion/{split}")
@@ -75,6 +80,8 @@ async def update_my_profile(request: Request, user: User = Depends(current_user)
         raise HTTPException(status_code=400, detail="显示名称至少需要 2 个字符。")
     if len(display_name) > 120 or len(group_name) > 120:
         raise HTTPException(status_code=400, detail="显示名称或小组名过长。")
+    if group_name != (user.group_name or ""):
+        record(db, user, "group.self_change", user_target(user), previous=user.group_name or "", current=group_name)
     user.display_name = display_name
     user.group_name = group_name
     db.commit()
@@ -98,6 +105,7 @@ async def change_my_password(request: Request, user: User = Depends(current_user
         raise HTTPException(status_code=400, detail="新密码不能与当前密码相同。")
     user.password_hash = pwd_context.hash(new_password)
     revoke_other_sessions(request, user)
+    record(db, user, "password.change", user_target(user))
     db.commit()
     return {"ok": True}
 

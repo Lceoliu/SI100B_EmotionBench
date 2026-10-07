@@ -19,6 +19,43 @@ export const statusLabels = {
   validated: '已验证'
 };
 
+export const auditActionLabels = {
+  'settings.update': '修改系统设置',
+  'submission.delete': '删除提交',
+  'submission.rejudge': '重新评测',
+  'submission.rejudge_errors': '批量重评系统错误',
+  'student.controls': '修改学生控制',
+  'student.reset_password': '重置学生密码',
+  'student.reset_quota': '刷新小组次数',
+  'group.assign': 'TA 修改分组',
+  'group.bulk_assign': '批量分组',
+  'group.self_change': '学生修改小组',
+  'invite.create': '添加邀请码',
+  'invite.delete': '删除邀请码',
+  'user.register': '新用户注册',
+  'password.change': '修改密码'
+};
+
+export const auditFieldLabels = {
+  quota_per_day: '每日次数',
+  final_pick_deadline: '截止时间',
+  freeze_leaderboard: '冻结排行榜',
+  disabled: '禁用账号',
+  submit_disabled: '暂停提交',
+  leaderboard_hidden: '隐藏榜单',
+  previous_status: '原状态',
+  previous_score: '原分数',
+  members: '成员',
+  ids: '提交',
+  owner: '提交者',
+  group: '小组',
+  status: '状态',
+  score: '分数',
+  label: '说明',
+  invite_code: '邀请码',
+  changes: '变更'
+};
+
 export const modeLabels = {
   public: '正式提交',
   'dry-run': '测试'

@@ -12,6 +12,7 @@ from app.leaderboard import group_leaderboard
 from app.public_config import public_config_payload
 from app.resources import find_resource, resource_rows
 from app.security import DOWNLOAD_EVENTS, check_rate_limit, client_key
+from app.submissions import queue_snapshot
 
 router = APIRouter()
 
@@ -44,6 +45,12 @@ def download_resource(resource_id: str, request: Request) -> FileResponse:
         filename=item["filename"],
         headers={"Cache-Control": "private, max-age=3600"},
     )
+
+
+@router.get("/api/queue")
+def queue_status(db: Session = Depends(get_db)) -> dict[str, Any]:
+    snapshot = queue_snapshot(db)
+    return {"queued": snapshot["queued"], "running": snapshot["running"]}
 
 
 @router.get("/api/leaderboard")

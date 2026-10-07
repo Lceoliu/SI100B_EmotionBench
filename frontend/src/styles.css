@@ -975,6 +975,16 @@ select:focus-visible {
   line-height: 1.55;
 }
 
+.window-bar select {
+  width: auto;
+  max-width: 260px;
+  min-height: 30px;
+}
+
+.cell-message.wide {
+  max-width: 520px;
+}
+
 .cell-message {
   display: inline-block;
   max-width: 260px;

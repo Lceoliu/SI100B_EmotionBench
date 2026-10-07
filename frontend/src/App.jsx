@@ -40,6 +40,8 @@ function App() {
   const [queue, setQueue] = useState([]);
   const [students, setStudents] = useState([]);
   const [invites, setInvites] = useState([]);
+  const [auditRows, setAuditRows] = useState([]);
+  const [queueCounts, setQueueCounts] = useState({ queued: 0, running: 0 });
   const [dashboard, setDashboard] = useState(null);
   const [resources, setResources] = useState([]);
   const [group, setGroup] = useState({ group_name: '', mates: [], personal: null, group: null, quota: null });
@@ -63,12 +65,14 @@ function App() {
   }, [active, user]);
 
   async function loadPublic() {
-    const [cfg, board, session, resourcePayload] = await Promise.all([
+    const [cfg, board, session, resourcePayload, queuePayload] = await Promise.all([
       api('/api/config'),
       api('/api/leaderboard'),
       api('/api/session'),
-      api('/api/resources')
+      api('/api/resources'),
+      api('/api/queue')
     ]);
+    setQueueCounts(queuePayload);
     setCsrfToken(session.csrf_token);
     setConfig(cfg);
     setLeaderboard(board.rows || []);
@@ -95,16 +99,19 @@ function App() {
       setQueue([]);
       setStudents([]);
       setInvites([]);
+      setAuditRows([]);
       return;
     }
-    const [queuePayload, studentsPayload, invitesPayload] = await Promise.all([
+    const [queuePayload, studentsPayload, invitesPayload, auditPayload] = await Promise.all([
       api('/api/admin/queue'),
       api('/api/admin/students'),
-      api('/api/admin/invites')
+      api('/api/admin/invites'),
+      api('/api/admin/audit?limit=200')
     ]);
     setQueue(queuePayload.rows || []);
     setStudents(studentsPayload.rows || []);
     setInvites(invitesPayload.rows || []);
+    setAuditRows(auditPayload.rows || []);
     try {
       const dashboardPayload = await api('/api/admin/dashboard');
       setDashboard(dashboardPayload);
@@ -130,9 +137,9 @@ function App() {
   }, [user]);
 
   const topStatus = useMemo(() => {
-    const running = leaderboard.filter((row) => ['queued', 'running'].includes(row.status)).length + mine.filter((row) => ['queued', 'running'].includes(row.status)).length;
-    return running ? `${running} 个任务运行中` : '队列空闲';
-  }, [leaderboard, mine]);
+    const { queued = 0, running = 0 } = queueCounts;
+    return queued || running ? `排队 ${queued} · 运行 ${running}` : '队列空闲';
+  }, [queueCounts]);
 
   async function refreshAll() {
     try {
@@ -404,6 +411,7 @@ function App() {
               queueRows={queue}
               students={students}
               invites={invites}
+              auditRows={auditRows}
               config={config}
               dashboard={dashboard}
               onSaveGroup={saveGroup}
@@ -475,7 +483,16 @@ function deadlineDisplay(value) {
   if (!value || String(value).includes('XX')) return '未设置';
   const end = new Date(value);
   if (!Number.isFinite(end.getTime())) return '未设置';
-  return value;
+  const text = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(end);
+  return `${text}（北京时间）`;
 }
 
 export default App;

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import env
+from app.audit import record, user_target
 from app.course import course_info, email_allowed, email_requirement_text
 from app.db import get_db
 from app.models import InviteCode, User
@@ -54,6 +55,8 @@ async def register(request: Request, db: Session = Depends(get_db)) -> dict[str,
         raise HTTPException(status_code=409, detail="该邮箱已注册。")
     user = User(student_id=student_id, display_name=display_name, password_hash=pwd_context.hash(password))
     db.add(user)
+    db.flush()
+    record(db, user, "user.register", user_target(user), invite_code=invite_code)
     db.commit()
     db.refresh(user)
     start_session(request, user)

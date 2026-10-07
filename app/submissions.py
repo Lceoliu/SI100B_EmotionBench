@@ -6,6 +6,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
 from app import env
 from app.config import load_config
 from app.models import Submission
@@ -53,3 +56,20 @@ def folder_size(path: Path) -> int:
 
 def bytes_mb(value: int) -> float:
     return round(value / 1024 / 1024, 2)
+
+
+def queue_snapshot(db: Session) -> dict[str, Any]:
+    """Queued submission ids in the order the worker claims them, plus the running count."""
+    queued_ids = db.scalars(
+        select(Submission.id)
+        .where(Submission.status == "queued", Submission.package_path != "", Submission.package_path != "seed")
+        .order_by(Submission.created_at.asc(), Submission.id.asc())
+    ).all()
+    running = db.scalar(select(func.count(Submission.id)).where(Submission.status == "running")) or 0
+    return {"positions": {submission_id: index + 1 for index, submission_id in enumerate(queued_ids)}, "queued": len(queued_ids), "running": int(running)}
+
+
+def with_queue_position(payload: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
+    payload["queue_position"] = snapshot["positions"].get(payload["id"])
+    payload["queue_length"] = snapshot["queued"]
+    return payload
